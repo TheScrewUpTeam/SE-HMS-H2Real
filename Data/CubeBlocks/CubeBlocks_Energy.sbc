@@ -137,8 +137,8 @@
             <BuildTimeSeconds>40</BuildTimeSeconds>
             <ResourceSinkGroup>Generators</ResourceSinkGroup>
             <ResourceSourceGroup>Reactors</ResourceSourceGroup>
-            <MaxPowerOutput>0.5</MaxPowerOutput>
-            <FuelCapacity>5000</FuelCapacity>
+            <MaxPowerOutput>0.3</MaxPowerOutput>
+            <FuelCapacity>500</FuelCapacity>
             <IsAirTight>false</IsAirTight>
             <InventorySize>
                 <X>1</X>
@@ -153,7 +153,7 @@
                     </Id>
                 </FuelInfo>
             </FuelInfos>
-            <FuelProductionToCapacityMultiplier>0.01</FuelProductionToCapacityMultiplier>
+            <FuelProductionToCapacityMultiplier>0.015</FuelProductionToCapacityMultiplier>
             <PrimarySound>ArcBlockHydrogenEngine</PrimarySound>
 
             <DamageEffectName>Damage_WeapExpl_Damaged</DamageEffectName>

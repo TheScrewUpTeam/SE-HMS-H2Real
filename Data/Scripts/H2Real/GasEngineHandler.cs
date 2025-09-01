@@ -142,7 +142,7 @@ namespace TSUT.H2Real
         private void AppendHeatInfo(IMyTerminalBlock block, StringBuilder builder)
         {
             float currentH2Consumption = GetCurrentH2Consumption();
-            float currentO2Consumption = GetCurrentO2Consumption();
+            float currentO2Consumption = GetCurrentO2ConsumptionInt();
             float currentHeat = _api.Utils.GetHeat(_engine);
             float blockCapacity = _api.Utils.GetThermalCapacity(_engine);
 
