@@ -428,10 +428,9 @@ namespace TSUT.HeatManagement
                 {
                     info.AppendLine("");
                     info.AppendLine($"Pipe networks:");
-                    foreach (var kvp in networkList)
+                    foreach (var kvp in neighborNetworkData)
                     {
-                        var networkBlock = kvp.Key;
-                        var networkData = neighborNetworkData[networkBlock];
+                        var networkData = kvp.Value;
                         info.AppendLine($"- #{networkData.hash} Length: {networkData.length}, Avg: {networkData.averageTemperature:F1} °C");
                     }
                 }
@@ -499,7 +498,6 @@ namespace TSUT.HeatManagement
                 var neighborList = new List<IMySlimBlock>();
                 block.SlimBlock.GetNeighbours(neighborList);
 
-                float energyTransferred = 0f;
                 var ownCapacity = api.Utils.GetThermalCapacity(block);
 
                 foreach (var neighborSlim in neighborList)
@@ -514,17 +512,15 @@ namespace TSUT.HeatManagement
                     {
                         neighborNetworks.Add(neighborFat, transfer / capacity);
                         neighborNetworkData.Add(neighborFat, (HeatNetworkData)netwrorkData);
-                        networkCumulative = -transfer / ownCapacity;
+                        networkCumulative -= transfer / ownCapacity;
                     }
                     else
                     {
                         neighborBlocks.Add(neighborFat, transfer / capacity);
-                        neighborCumulative = -transfer / ownCapacity;
+                        neighborCumulative -= transfer / ownCapacity;
                     }
-                    energyTransferred -= transfer;
+                    ownHeatChange -= transfer / ownCapacity;
                 }
-
-                ownHeatChange = energyTransferred / ownCapacity;
             }
         }
 

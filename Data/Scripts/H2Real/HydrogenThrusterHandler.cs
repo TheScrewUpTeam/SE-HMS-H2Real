@@ -1,16 +1,11 @@
-using System;
 using System.Collections.Generic;
-using System.Runtime.InteropServices;
 using System.Text;
 using Sandbox.Definitions;
-using Sandbox.Game.Entities;
-using Sandbox.Game.EntityComponents;
+using Sandbox.Game;
 using Sandbox.ModAPI;
-using Sandbox.ModAPI.Interfaces;
 using Sandbox.ModAPI.Interfaces.Terminal;
 using TSUT.HeatManagement;
-using VRage.Utils;
-using VRageMath;
+using VRage.Game;
 using static TSUT.HeatManagement.HmsApi;
 
 namespace TSUT.H2Real
@@ -19,7 +14,6 @@ namespace TSUT.H2Real
     {
         IMyThrust _thruster;
         HmsApi _api;
-        MyResourceSinkComponent _o2sink;
         bool _playerWnatsOn;
         const int ONE_MILLION = 1000000;
 
@@ -51,7 +45,6 @@ namespace TSUT.H2Real
                                 value = (block as IMyFunctionalBlock).Enabled;
                             else
                                 value = _playerWnatsOn;
-                            MyLog.Default.WriteLine($"[H2Real] OnOffGetter.Engine for block {block.DisplayNameText} is current {block == _thruster}, result: {value}");
                             return value;
                         };
                         onOffControl.Setter += (block, value) =>
@@ -186,16 +179,36 @@ namespace TSUT.H2Real
             float tempChange = 0f;
 
             float capacity = _api.Utils.GetThermalCapacity(_thruster);
-            tempChange += CalculateHeat(shouldBeConsumed) / capacity;
-            tempChange -= _api.Utils.GetAmbientHeatLoss(_thruster, deltaTime);
+            var internalUse = CalculateHeat(currentH2Consumption * deltaTime) / capacity;
+            var ambientExchange = _api.Utils.GetAmbientHeatLoss(_thruster, deltaTime);
+
+            tempChange += internalUse;
+            tempChange -= ambientExchange;
 
             return tempChange;
         }
 
         public override void ReactOnNewHeat(float heat)
         {
+            _api.Effects.UpdateBlockHeatLight(_thruster, heat);
             _thruster.SetDetailedInfoDirty();
             _thruster.RefreshCustomInfo();
+            if (heat >= Config.Instance.H2_THRUSTER_CRITICAL_TEMP && _thruster.IsFunctional)
+            {
+                DamageThruster();
+            }
+        }
+
+        private void DamageThruster()
+        {
+            var slimBlock = _thruster.SlimBlock;
+            var integrity = slimBlock.MaxIntegrity;
+            var damage = integrity * Config.Instance.DAMAGE_PERCENT_ON_VERHEAT;
+            slimBlock.DoDamage(damage, MyDamageType.Explosion, true);
+            MyVisualScriptLogicProvider.PlaySingleSoundAtEntity(
+                "ArcWepSmallMissileExplShip",    // sound subtypeId from Audio.sbc
+                _thruster.Name
+            );
         }
 
         public override void SpreadHeat(float deltaTime)

@@ -1,12 +1,12 @@
 using System.Collections.Generic;
 using System.Text;
+using Sandbox.Game;
 using Sandbox.Game.EntityComponents;
 using Sandbox.ModAPI;
 using Sandbox.ModAPI.Interfaces.Terminal;
 using TSUT.HeatManagement;
 using VRage.Game;
 using VRage.Game.ObjectBuilders.Definitions;
-using VRage.Utils;
 using static TSUT.HeatManagement.HmsApi;
 
 namespace TSUT.H2Real
@@ -47,7 +47,6 @@ namespace TSUT.H2Real
                     {
                         onOffControl.Getter += (block) =>
                         {
-                            // MyLog.Default.WriteLine($"[H2Real] OnOffGetter.Engine for block {block.DisplayNameText} is current {block == _engine}");
                             if (block == _engine)
                                 return _playerWantsOn;
                             return (block as IMyFunctionalBlock).Enabled;
@@ -95,7 +94,6 @@ namespace TSUT.H2Real
         {
             var currentH2Consumption = GetCurrentH2Consumption();
             var result = GetCurrentH2Consumption() * 0.5f;
-            MyLog.Default.WriteLine($"[H2Real] Requested consumption for {_engine.DisplayNameText}: {result} ({currentH2Consumption})");
             return result;
         }
 
@@ -208,9 +206,19 @@ namespace TSUT.H2Real
             float capacity = _api.Utils.GetThermalCapacity(_engine);
             tempChange += CalculateHeat(currentH2Consumption * deltaTime) / capacity;
 
-            // MyLog.Default.WriteLine($"[H2Real] GasEngineHandler GetHeatChange: {tempChange} °C/s for {_engine.DisplayNameText} while player wants {_playerWantsOn}");
-
             return tempChange;
+        }
+
+        private void DamageEngine()
+        {
+            var slimBlock = _engine.SlimBlock;
+            var integrity = slimBlock.MaxIntegrity;
+            var damage = integrity * Config.Instance.DAMAGE_PERCENT_ON_VERHEAT;
+            slimBlock.DoDamage(damage, MyDamageType.Explosion, true);
+            MyVisualScriptLogicProvider.PlaySingleSoundAtEntity(
+                "ArcWepSmallMissileExplShip",    // sound subtypeId from Audio.sbc
+                _engine.Name
+            );
         }
 
         public override void ReactOnNewHeat(float heat)
@@ -218,6 +226,10 @@ namespace TSUT.H2Real
             _api.Effects.UpdateBlockHeatLight(_engine, heat);
             _engine.SetDetailedInfoDirty();
             _engine.RefreshCustomInfo();
+            if (heat >= Config.Instance.H2_ENGINE_CRITICAL_TEMP && _engine.IsFunctional)
+            {
+                DamageEngine();
+            }
         }
 
         public override void SpreadHeat(float deltaTime)

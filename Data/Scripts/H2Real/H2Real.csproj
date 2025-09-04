@@ -51,7 +51,6 @@
   <ItemGroup>
     <Compile Include="Config.cs" />
     <Compile Include="HmsApiV1.0.cs" />
-    <Compile Include="HydrogenGenerators.cs" />
     <Compile Include="GasEngineHandler.cs" />
     <Compile Include="GasGeneratorHandler.cs" />
     <Compile Include="HydrogenThrusterHandler.cs" />
