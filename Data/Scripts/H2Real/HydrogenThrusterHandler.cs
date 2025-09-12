@@ -2,10 +2,13 @@ using System.Collections.Generic;
 using System.Text;
 using Sandbox.Definitions;
 using Sandbox.Game;
+using Sandbox.Game.Entities;
 using Sandbox.ModAPI;
 using Sandbox.ModAPI.Interfaces.Terminal;
 using TSUT.HeatManagement;
 using VRage.Game;
+using VRage.Game.ModAPI;
+using VRage.Utils;
 using static TSUT.HeatManagement.HmsApi;
 
 namespace TSUT.H2Real
@@ -16,6 +19,7 @@ namespace TSUT.H2Real
         HmsApi _api;
         bool _playerWnatsOn;
         const int ONE_MILLION = 1000000;
+        bool _switchSubscribed = false;
 
         public HydrogenThrusterHandler(IMyThrust block, HmsApi api) : base(block)
         {
@@ -28,9 +32,13 @@ namespace TSUT.H2Real
 
         private void TrackOnSwitch()
         {
-            IMyTerminalControls terminal = MyAPIGateway.TerminalControls;
-            List<IMyTerminalControl> controls;
-            terminal.GetControls<IMyThrust>(out controls);
+            MyAPIGateway.TerminalControls.CustomControlGetter += OnCustomControlGetter;
+        }
+
+        private void OnCustomControlGetter(IMyTerminalBlock topBlock, List<IMyTerminalControl> controls)
+        {
+            if (topBlock != _thruster || _switchSubscribed)
+                return;
             foreach (var control in controls)
             {
                 if (control.Id == "OnOff")
@@ -40,38 +48,83 @@ namespace TSUT.H2Real
                     {
                         onOffControl.Getter += (block) =>
                         {
-                            bool value;
-                            if (block != _thruster)
-                                value = (block as IMyFunctionalBlock).Enabled;
-                            else
-                                value = _playerWnatsOn;
-                            return value;
+                            if (block == _thruster)
+                                return _playerWnatsOn;
+                            return (block as IMyFunctionalBlock).Enabled;
                         };
                         onOffControl.Setter += (block, value) =>
                         {
                             if (block != _thruster)
                                 return;
+
                             _playerWnatsOn = value;
                         };
+                        _switchSubscribed = true;
                     }
                 }
             }
         }
 
+        
         private List<IMyGasTank> FindConnectedO2TanksThroughConveyor()
         {
             var result = new List<IMyGasTank>();
-            var candidates = new List<IMyGasTank>();
-            MyAPIGateway.TerminalActionsHelper.GetTerminalSystemForGrid(_thruster.CubeGrid).GetBlocksOfType(candidates);
-            foreach (var candidate in candidates)
+            var grids = FindSubgrids(_thruster.CubeGrid);
+            foreach (var grid in grids)
             {
-                if (candidate.BlockDefinition.SubtypeName == "" || candidate.BlockDefinition.SubtypeName.Contains("Oxygen"))
+                var candidates = new List<IMyGasTank>();
+                MyAPIGateway.TerminalActionsHelper.GetTerminalSystemForGrid(grid).GetBlocksOfType(candidates);
+                foreach (var candidate in candidates)
                 {
-                    result.Add(candidate);
+                    var isOxygen = candidate.BlockDefinition.SubtypeName == "" || candidate.BlockDefinition.SubtypeName.Contains("Oxygen");
+                    var isStokpile = candidate.Stockpile;
+                    var alreadyFound = result.Contains(candidate);
+                    if (isOxygen & !isStokpile & !alreadyFound)
+                    {
+                        result.Add(candidate);
+                    }
                 }
             }
 
             return result;
+        }
+
+        List<IMyCubeGrid> FindSubgrids(IMyCubeGrid root)
+        {
+            var visited = new List<IMyCubeGrid>();
+            var stack = new List<IMyCubeGrid>
+            {
+                root
+            };
+
+            while (stack.Count > 0)
+            {
+                var grid = stack.Pop();
+                if (grid == null)
+                    continue;
+                if (visited.Contains(grid))
+                    continue;
+
+                visited.Add(grid);
+
+                var motors = grid.GetFatBlocks<IMyMotorStator>();
+                foreach (var block in motors)
+                {
+                    stack.Add(block?.TopGrid);
+                }
+                var pistons = grid.GetFatBlocks<IMyPistonBase>();
+                foreach (var block in pistons)
+                {
+                    stack.Add(block?.TopGrid);
+                }
+                var connectors = grid.GetFatBlocks<IMyShipConnector>();
+                foreach (var block in connectors)
+                {
+                    stack.Add(block?.OtherConnector?.CubeGrid);
+                }
+            }
+
+            return visited;
         }
 
         float GetCurrentH2Consumption()
@@ -158,6 +211,7 @@ namespace TSUT.H2Real
         public override void Cleanup()
         {
             _thruster.AppendingCustomInfo -= AppendHeatInfo;
+            MyAPIGateway.TerminalControls.CustomControlGetter -= OnCustomControlGetter;
         }
         public float CalculateHeat(float consumption)
         {
@@ -170,11 +224,17 @@ namespace TSUT.H2Real
         {
             float currentH2Consumption = GetCurrentH2Consumption();
 
-            float shouldBeConsumed = currentH2Consumption * 0.5f * deltaTime;
-            bool enoughO2 = ConsumeO2(shouldBeConsumed);
-
-            
-            _thruster.Enabled = _playerWnatsOn && enoughO2;
+            var newState = false;
+            if (_playerWnatsOn)
+            {
+                float shouldBeConsumed = currentH2Consumption * 0.5f * deltaTime;
+                bool enoughO2 = ConsumeO2(shouldBeConsumed);
+                newState = enoughO2;
+            }
+            if (_thruster.Enabled != newState)
+            {
+                _thruster.Enabled = newState;
+            }
             
             float tempChange = 0f;
 

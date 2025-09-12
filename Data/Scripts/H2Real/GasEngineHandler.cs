@@ -6,7 +6,9 @@ using Sandbox.ModAPI;
 using Sandbox.ModAPI.Interfaces.Terminal;
 using TSUT.HeatManagement;
 using VRage.Game;
+using VRage.Game.ModAPI;
 using VRage.Game.ObjectBuilders.Definitions;
+using VRage.Utils;
 using static TSUT.HeatManagement.HmsApi;
 
 namespace TSUT.H2Real
@@ -17,6 +19,7 @@ namespace TSUT.H2Real
         HmsApi _api;
         bool _playerWantsOn;
         const int ONE_MILLION = 1000000;
+        bool _switchSubscribed = false;
 
         public GasEngineHandler(IMyPowerProducer block, HmsApi api) : base(block)
         {
@@ -36,7 +39,7 @@ namespace TSUT.H2Real
 
         private void OnCustomControlGetter(IMyTerminalBlock topBlock, List<IMyTerminalControl> controls)
         {
-            if (topBlock != _engine)
+            if (topBlock != _engine || _switchSubscribed)
                 return;
             foreach (var control in controls)
             {
@@ -55,8 +58,10 @@ namespace TSUT.H2Real
                         {
                             if (block != _engine)
                                 return;
+
                             _playerWantsOn = value;
                         };
+                        _switchSubscribed = true;
                     }
                 }
             }
@@ -65,17 +70,62 @@ namespace TSUT.H2Real
         private List<IMyGasTank> FindConnectedO2TanksThroughConveyor()
         {
             var result = new List<IMyGasTank>();
-            var candidates = new List<IMyGasTank>();
-            MyAPIGateway.TerminalActionsHelper.GetTerminalSystemForGrid(_engine.CubeGrid).GetBlocksOfType(candidates);
-            foreach (var candidate in candidates)
+            var grids = FindSubgrids(_engine.CubeGrid);
+            foreach (var grid in grids)
             {
-                if (candidate.BlockDefinition.SubtypeName == "" || candidate.BlockDefinition.SubtypeName.Contains("Oxygen"))
+                var candidates = new List<IMyGasTank>();
+                MyAPIGateway.TerminalActionsHelper.GetTerminalSystemForGrid(grid).GetBlocksOfType(candidates);
+                foreach (var candidate in candidates)
                 {
-                    result.Add(candidate);
+                    var isOxygen = candidate.BlockDefinition.SubtypeName == "" || candidate.BlockDefinition.SubtypeName.Contains("Oxygen");
+                    var isStokpile = candidate.Stockpile;
+                    var alreadyFound = result.Contains(candidate);
+                    if (isOxygen & !isStokpile & !alreadyFound)
+                    {
+                        result.Add(candidate);
+                    }
                 }
             }
 
             return result;
+        }
+
+        List<IMyCubeGrid> FindSubgrids(IMyCubeGrid root)
+        {
+            var visited = new List<IMyCubeGrid>();
+            var stack = new List<IMyCubeGrid>
+            {
+                root
+            };
+
+            while (stack.Count > 0)
+            {
+                var grid = stack.Pop();
+                if (grid == null)
+                    continue;
+                if (visited.Contains(grid))
+                    continue;
+
+                visited.Add(grid);
+
+                var motors = grid.GetFatBlocks<IMyMotorStator>();
+                foreach (var block in motors)
+                {
+                    stack.Add(block?.TopGrid);
+                }
+                var pistons = grid.GetFatBlocks<IMyPistonBase>();
+                foreach (var block in pistons)
+                {
+                    stack.Add(block?.TopGrid);
+                }
+                var connectors = grid.GetFatBlocks<IMyShipConnector>();
+                foreach (var block in connectors)
+                {
+                    stack.Add(block?.OtherConnector?.CubeGrid);
+                }
+            }
+
+            return visited;
         }
 
         float GetCurrentH2Consumption()
@@ -92,7 +142,6 @@ namespace TSUT.H2Real
 
         float GetCurrentO2ConsumptionInt()
         {
-            var currentH2Consumption = GetCurrentH2Consumption();
             var result = GetCurrentH2Consumption() * 0.5f;
             return result;
         }
@@ -198,10 +247,20 @@ namespace TSUT.H2Real
             tempChange -= _api.Utils.GetAmbientHeatLoss(_engine, deltaTime);
 
             float currentH2Consumption = GetCurrentH2Consumption();
-            float shouldBeConsumed = currentH2Consumption * 0.5f * deltaTime;
-            bool enoughO2 = ConsumeO2(shouldBeConsumed);
+            var newState = false;
+                
+            if (_playerWantsOn)
+            {
+                float shouldBeConsumed = currentH2Consumption * 0.5f * deltaTime;
+                bool enoughO2 = ConsumeO2(shouldBeConsumed);
 
-            _engine.Enabled = _playerWantsOn && enoughO2;
+                newState = enoughO2;
+
+            }
+
+            if (_engine.Enabled != newState) {
+                _engine.Enabled = newState;
+            }
 
             float capacity = _api.Utils.GetThermalCapacity(_engine);
             tempChange += CalculateHeat(currentH2Consumption * deltaTime) / capacity;

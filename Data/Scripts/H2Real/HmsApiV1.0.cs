@@ -13,7 +13,7 @@ namespace TSUT.HeatManagement
 {
     public class HmsApi
     {
-        public string ApiVersion = "1.0.1";
+        public string ApiVersion = "1.0.2";
         public static long HeatApiMessageId = 35136709491; // Unique message ID for heat API
         public static long HeatProviderMesageId = 35136709492; // Unique message ID for heat provider
 
@@ -21,6 +21,7 @@ namespace TSUT.HeatManagement
         private Action _onReady;
         public IHeatUtils Utils;
         public IHeatEffects Effects;
+        private bool _isApiReceived = false;
 
         public HmsApi(Action onReady)
         {
@@ -35,9 +36,12 @@ namespace TSUT.HeatManagement
 
         private void OnApiReceived(object obj)
         {
+            if (_isApiReceived)
+                return;
             Utils = new HmsUtils(obj);
             Effects = new HmsEffects(obj);
             _onReady?.Invoke();
+            _isApiReceived = true;
         }
 
         public void RegisterHeatBehaviorFactory(
@@ -428,9 +432,10 @@ namespace TSUT.HeatManagement
                 {
                     info.AppendLine("");
                     info.AppendLine($"Pipe networks:");
-                    foreach (var kvp in neighborNetworkData)
+                    foreach (var kvp in networkList)
                     {
-                        var networkData = kvp.Value;
+                        var networkBlock = kvp.Key;
+                        var networkData = neighborNetworkData[networkBlock];
                         info.AppendLine($"- #{networkData.hash} Length: {networkData.length}, Avg: {networkData.averageTemperature:F1} °C");
                     }
                 }
@@ -498,6 +503,7 @@ namespace TSUT.HeatManagement
                 var neighborList = new List<IMySlimBlock>();
                 block.SlimBlock.GetNeighbours(neighborList);
 
+                float energyTransferred = 0f;
                 var ownCapacity = api.Utils.GetThermalCapacity(block);
 
                 foreach (var neighborSlim in neighborList)
@@ -512,15 +518,17 @@ namespace TSUT.HeatManagement
                     {
                         neighborNetworks.Add(neighborFat, transfer / capacity);
                         neighborNetworkData.Add(neighborFat, (HeatNetworkData)netwrorkData);
-                        networkCumulative -= transfer / ownCapacity;
+                        networkCumulative = -transfer / ownCapacity;
                     }
                     else
                     {
                         neighborBlocks.Add(neighborFat, transfer / capacity);
-                        neighborCumulative -= transfer / ownCapacity;
+                        neighborCumulative = -transfer / ownCapacity;
                     }
-                    ownHeatChange -= transfer / ownCapacity;
+                    energyTransferred -= transfer;
                 }
+
+                ownHeatChange = energyTransferred / ownCapacity;
             }
         }
 

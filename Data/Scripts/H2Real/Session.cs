@@ -4,7 +4,6 @@ using TSUT.HeatManagement;
 using System.Collections.Generic;
 using VRage.Game.ModAPI;
 using VRage.Utils;
-using SpaceEngineers.Game.Entities.Blocks;
 
 namespace TSUT.H2Real
 {
@@ -53,7 +52,6 @@ namespace TSUT.H2Real
 
                         cubeBlocks.Add(thruster);
                     }
-                    MyLog.Default.WriteLine($"[H2Real] Thrusters found on {grid.DisplayNameText}: {cubeBlocks.Count}");
                     return cubeBlocks;
                 },
                 (block) =>
@@ -77,7 +75,6 @@ namespace TSUT.H2Real
 
                         cubeBlocks.Add(engine);
                     }
-                    MyLog.Default.WriteLine($"[H2Real] Engines found on {grid.DisplayNameText}: {cubeBlocks.Count}");
                     return cubeBlocks;
                 },
                 (block) =>
