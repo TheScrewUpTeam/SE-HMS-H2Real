@@ -91,5 +91,13 @@ namespace TSUT.H2Real
         {
             _api.Cleanup();
         }
+
+        public override void SaveData()
+        {
+            if (MyAPIGateway.Multiplayer.IsServer)
+            {
+                Config.Instance.Save();
+            }
+        }
     }
 }
