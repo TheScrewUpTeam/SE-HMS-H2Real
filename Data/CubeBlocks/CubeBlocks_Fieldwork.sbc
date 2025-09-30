@@ -308,7 +308,7 @@
             <FuelPullAmountFromConveyorInMinutes>2.2</FuelPullAmountFromConveyorInMinutes>
 
             <StandbyPowerConsumption>0.001</StandbyPowerConsumption>
-            <OperationalPowerConsumption>0.5</OperationalPowerConsumption>
+            <OperationalPowerConsumption>15</OperationalPowerConsumption>
             <ProducedGases>
                 <GasInfo>
                     <Id>

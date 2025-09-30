@@ -8,7 +8,6 @@ using TSUT.HeatManagement;
 using VRage.Game;
 using VRage.Game.ModAPI;
 using VRage.Game.ObjectBuilders.Definitions;
-using VRage.Utils;
 using static TSUT.HeatManagement.HmsApi;
 
 namespace TSUT.H2Real
@@ -20,6 +19,7 @@ namespace TSUT.H2Real
         bool _playerWantsOn;
         const int ONE_MILLION = 1000000;
         bool _switchSubscribed = false;
+        bool _nextCallINternal = false;
 
         public GasEngineHandler(IMyPowerProducer block, HmsApi api) : base(block)
         {
@@ -30,6 +30,17 @@ namespace TSUT.H2Real
             TrackOnSwitch();
             _engine.RefreshCustomInfo();
             _engine.SetDetailedInfoDirty();
+            block.EnabledChanged += Block_EnabledChanged;
+        }
+
+        private void Block_EnabledChanged(IMyTerminalBlock block)
+        {
+            if (_nextCallINternal)
+            {
+                _nextCallINternal = false;
+                return;
+            }
+            _playerWantsOn = (block as IMyFunctionalBlock).Enabled;
         }
 
         private void TrackOnSwitch()
@@ -259,6 +270,7 @@ namespace TSUT.H2Real
             }
 
             if (_engine.Enabled != newState) {
+                _nextCallINternal = true;
                 _engine.Enabled = newState;
             }
 

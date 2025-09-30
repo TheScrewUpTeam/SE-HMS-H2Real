@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text;
 using Sandbox.Definitions;
@@ -6,6 +7,7 @@ using Sandbox.Game.Entities;
 using Sandbox.ModAPI;
 using Sandbox.ModAPI.Interfaces.Terminal;
 using TSUT.HeatManagement;
+using VRage;
 using VRage.Game;
 using VRage.Game.ModAPI;
 using VRage.Utils;
@@ -20,6 +22,7 @@ namespace TSUT.H2Real
         bool _playerWnatsOn;
         const int ONE_MILLION = 1000000;
         bool _switchSubscribed = false;
+        bool _nextCallINternal = false;
 
         public HydrogenThrusterHandler(IMyThrust block, HmsApi api) : base(block)
         {
@@ -28,6 +31,17 @@ namespace TSUT.H2Real
             _thruster.AppendingCustomInfo += AppendHeatInfo;
             _playerWnatsOn = _thruster.Enabled;
             TrackOnSwitch();
+            block.EnabledChanged += Block_EnabledChanged;
+        }
+
+        private void Block_EnabledChanged(IMyTerminalBlock block)
+        {
+            if (_nextCallINternal)
+            {
+                _nextCallINternal = false;
+                return;
+            }
+            _playerWnatsOn = (block as IMyFunctionalBlock).Enabled;
         }
 
         private void TrackOnSwitch()
@@ -233,6 +247,7 @@ namespace TSUT.H2Real
             }
             if (_thruster.Enabled != newState)
             {
+                _nextCallINternal = true;
                 _thruster.Enabled = newState;
             }
             
