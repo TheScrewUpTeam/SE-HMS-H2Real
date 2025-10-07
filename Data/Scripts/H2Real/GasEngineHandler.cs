@@ -153,20 +153,8 @@ namespace TSUT.H2Real
 
         float GetCurrentO2ConsumptionInt()
         {
-            var result = GetCurrentH2Consumption() * 0.5f;
+            var result = GetCurrentH2Consumption() * Config.Instance.O2_USAGE_FROM_H2_ENGINE;
             return result;
-        }
-
-        float GetCurrentO2Consumption()
-        {
-            var sink = _engine?.Components.Get<MyResourceSinkComponent>();
-            if (sink == null)
-                return 0f;
-
-            var oxygenId = new MyDefinitionId(typeof(MyObjectBuilder_GasProperties), "Oxygen");
-            var currentConsumption = sink.CurrentInputByType(oxygenId);
-
-            return currentConsumption; // L/s
         }
 
         bool ConsumeO2(float shouldBeConsumed)
@@ -262,7 +250,7 @@ namespace TSUT.H2Real
                 
             if (_playerWantsOn)
             {
-                float shouldBeConsumed = currentH2Consumption * 0.5f * deltaTime;
+                float shouldBeConsumed = GetCurrentO2ConsumptionInt() * deltaTime;
                 bool enoughO2 = ConsumeO2(shouldBeConsumed);
 
                 newState = enoughO2;

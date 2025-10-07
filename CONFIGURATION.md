@@ -10,6 +10,8 @@ These values can be adjusted to fine-tune performance, efficiency, and difficult
 | Parameter | Default Value | Unit | Description |
 |-----------|---------------|------|-------------|
 | `SYSTEM_AUTO_UPDATE` | `true` | – | If enabled, the system automatically updates values when changes are detected. |
+| `O2_USAGE_FROM_H2_THRUSTER` | `0.5` | % | Percentage of oxygen consumed per unit hydrogen used by thrusters. |
+| `O2_USAGE_FROM_H2_ENGINE` | `0.5` | % | Percentage of oxygen consumed per unit hydrogen used by engines. |
 | `ICE_MELTING_ENERGY_PER_KG` | `334000` | W/kg | Energy required to melt 1 kg of ice. Based on the latent heat of fusion of water. |
 | `GAS_COMPRESSION_POWER_FULL_PER_LITER` | `500` | W/L | Power required to compress 1 liter of hydrogen gas to full storage pressure. |
 | `ENERGY_PER_LITER` | `1495.0` | J/L | Energy density of hydrogen gas per liter (at storage conditions). |

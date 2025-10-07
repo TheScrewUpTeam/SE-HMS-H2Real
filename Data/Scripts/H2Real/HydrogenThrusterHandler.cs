@@ -149,7 +149,7 @@ namespace TSUT.H2Real
         }
         float GetCurrentO2Consumption()
         {
-            return GetCurrentH2Consumption() * 0.5f;
+            return GetCurrentH2Consumption() * Config.Instance.O2_USAGE_FROM_H2_THRUSTER;
         }
 
         bool ConsumeO2(float shouldBeConsumed)
@@ -241,7 +241,7 @@ namespace TSUT.H2Real
             var newState = false;
             if (_playerWnatsOn)
             {
-                float shouldBeConsumed = currentH2Consumption * 0.5f * deltaTime;
+                float shouldBeConsumed = GetCurrentO2Consumption() * deltaTime;
                 bool enoughO2 = ConsumeO2(shouldBeConsumed);
                 newState = enoughO2;
             }
