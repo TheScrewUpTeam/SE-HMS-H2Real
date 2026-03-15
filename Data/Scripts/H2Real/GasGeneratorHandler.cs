@@ -127,7 +127,7 @@ namespace TSUT.H2Real
 
             if (_generator.DisplayNameText.Contains("debug"))
             {
-                // MyLog.Default.WriteLine($"[H2Real] Start processing {_generator.DisplayNameText} with {_api.Utils.GetHeat(_generator)}C ");
+                MyLog.Default.WriteLine($"[H2Real] Start processing {_generator.DisplayNameText} with {_api.Utils.GetHeat(_generator)}C ");
             }
 
             float extraPower = 0; // MW
@@ -137,7 +137,7 @@ namespace TSUT.H2Real
 
             if (_generator.DisplayNameText.Contains("debug"))
             {
-                // MyLog.Default.WriteLine($"[H2Real] Ice processing: {usedTemperature:F4}");
+                MyLog.Default.WriteLine($"[H2Real] Ice processing: {usedTemperature:F4}");
             }
 
             // Add power consumption for compressing
@@ -147,7 +147,7 @@ namespace TSUT.H2Real
 
             if (_generator.DisplayNameText.Contains("debug"))
             {
-                // MyLog.Default.WriteLine($"[H2Real] Amb exchange: {usedTemperature:F4}");
+                MyLog.Default.WriteLine($"[H2Real] Amb exchange: {usedTemperature:F4}");
             }
 
             var previous = sink.RequiredInputByType(MyResourceDistributorComponent.ElectricityId);
@@ -159,7 +159,7 @@ namespace TSUT.H2Real
 
             if (_generator.DisplayNameText.Contains("debug"))
             {
-                // MyLog.Default.WriteLine($"[H2Real] Internal temperature change: {usedTemperature:F4}");
+                MyLog.Default.WriteLine($"[H2Real] Internal temperature change: {usedTemperature:F4}");
             }
 
             return usedTemperature;

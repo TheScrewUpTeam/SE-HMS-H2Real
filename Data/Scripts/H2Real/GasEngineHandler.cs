@@ -8,6 +8,7 @@ using TSUT.HeatManagement;
 using VRage.Game;
 using VRage.Game.ModAPI;
 using VRage.Game.ObjectBuilders.Definitions;
+using VRage.Utils;
 using static TSUT.HeatManagement.HmsApi;
 
 namespace TSUT.H2Real
@@ -157,34 +158,6 @@ namespace TSUT.H2Real
             return result;
         }
 
-        bool ConsumeO2(float shouldBeConsumed)
-        {
-            var tanks = FindConnectedO2TanksThroughConveyor();
-            foreach (IMyGasTank tank in tanks)
-            {
-                if (tank.FilledRatio == 0)
-                {
-                    continue;
-                }
-                double currentVolume = tank.Capacity * tank.FilledRatio;
-
-                if (currentVolume < shouldBeConsumed)
-                {
-                    tank.ChangeFilledRatio(0, true);
-                    shouldBeConsumed -= (float)currentVolume;
-                }
-                else
-                {
-                    var newVolume = currentVolume - shouldBeConsumed;
-                    tank.ChangeFilledRatio(newVolume / tank.Capacity, true);
-                    shouldBeConsumed = 0;
-                    return true;
-                }
-                tank.SetDetailedInfoDirty();
-            }
-            return false;
-        }
-
         private void AppendHeatInfo(IMyTerminalBlock block, StringBuilder builder)
         {
             float currentH2Consumption = GetCurrentH2Consumption();
@@ -247,22 +220,36 @@ namespace TSUT.H2Real
 
             float currentH2Consumption = GetCurrentH2Consumption();
             var newState = false;
-                
+
             if (_playerWantsOn)
             {
                 float shouldBeConsumed = GetCurrentO2ConsumptionInt() * deltaTime;
-                bool enoughO2 = ConsumeO2(shouldBeConsumed);
+                bool enoughO2 = _api.Utils.HasEnoughO2(shouldBeConsumed, deltaTime, Block);
 
-                newState = enoughO2;
+                if (_engine.DisplayNameText.Contains("debug"))
+                {
+                    MyAPIGateway.Utilities.ShowMessage("[H2Real.Engine]", $"O2 to consume: {shouldBeConsumed:F4}, Enough: {enoughO2}");
+                }
 
+                if (enoughO2)
+                {
+                    newState = _api.Utils.ConsumeO2(shouldBeConsumed, deltaTime, Block) <= 0;
+                }
             }
 
-            if (_engine.Enabled != newState) {
+            if (_engine.Enabled != newState)
+            {
+                if (_engine.DisplayNameText.Contains("debug"))
+                {
+                    MyAPIGateway.Utilities.ShowMessage("[H2Real.Engine]", $"Switch {Block.DisplayNameText} state: {_engine.Enabled:F4} -> {newState}");
+                }
                 _nextCallINternal = true;
                 _engine.Enabled = newState;
             }
 
             float capacity = _api.Utils.GetThermalCapacity(_engine);
+            if (capacity <= 0f)
+                return 0f;
             tempChange += CalculateHeat(currentH2Consumption * deltaTime) / capacity;
 
             return tempChange;

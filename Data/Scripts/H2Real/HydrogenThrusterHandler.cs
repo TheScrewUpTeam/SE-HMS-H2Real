@@ -242,8 +242,11 @@ namespace TSUT.H2Real
             if (_playerWnatsOn)
             {
                 float shouldBeConsumed = GetCurrentO2Consumption() * deltaTime;
-                bool enoughO2 = ConsumeO2(shouldBeConsumed);
-                newState = enoughO2;
+                // bool enoughO2 = ConsumeO2(shouldBeConsumed);
+                bool enoughO2 = _api.Utils.HasEnoughO2(shouldBeConsumed, deltaTime, Block);
+                if (enoughO2) {
+                    newState = _api.Utils.ConsumeO2(shouldBeConsumed, deltaTime, Block) <= 0;
+                }
             }
             if (_thruster.Enabled != newState)
             {

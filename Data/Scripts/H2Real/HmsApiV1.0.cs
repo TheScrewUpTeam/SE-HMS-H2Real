@@ -202,6 +202,18 @@ namespace TSUT.HeatManagement
             float GetExchangeUniversal(IMyCubeBlock block, IMyCubeBlock neighborBlock, float deltaTime);
 
             /// <summary>
+            /// Consumes requested amount O2 using internal O2 Distribution System.
+            /// Returns the O2 amount that is not covered b production/storage.
+            /// </summary>
+            float ConsumeO2(float amount, float deltaTime, IMyCubeBlock block);
+
+            /// <summary>
+            /// Estimates is there enough O2 in internal Disstribution System.
+            /// Do not consumes anything.
+            /// </summary>
+            bool HasEnoughO2(float amount, float deltaTime, IMyCubeBlock block);
+
+            /// <summary>
             /// Retrieves the current heat management system configuration.
             /// Contains all the configurable parameters that control the behavior of the heat system,
             /// such as cooling rates, conductivity values, and various behavioral flags.
@@ -888,6 +900,28 @@ namespace TSUT.HeatManagement
                     return fn(block?.EntityId ?? 0, neighborBlock?.EntityId ?? 0, deltaTime);
                 }
                 return 0f;
+            }
+
+            public float ConsumeO2(float amount, float deltaTime, IMyCubeBlock block)
+            {
+                object method;
+                if (client.TryGetValue("ConsumeO2", out method) && method is Func<float, float, long, float>)
+                {
+                    var fn = (Func<float, float, long, float>)method;
+                    return fn(amount, deltaTime, block?.EntityId ?? 0);
+                }
+                return amount;
+            }
+
+            public bool HasEnoughO2(float amount, float deltaTime, IMyCubeBlock block)
+            {
+                object method;
+                if (client.TryGetValue("HasEnoughO2", out method) && method is Func<float, float, long, bool>)
+                {
+                    var fn = (Func<float, float, long, bool>)method;
+                    return fn(amount, deltaTime, block?.EntityId ?? 0);
+                }
+                return false;
             }
 
             public HmsConfig GetHmsConfig()
