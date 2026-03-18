@@ -79,29 +79,6 @@ namespace TSUT.H2Real
             }
         }
 
-        private List<IMyGasTank> FindConnectedO2TanksThroughConveyor()
-        {
-            var result = new List<IMyGasTank>();
-            var grids = FindSubgrids(_engine.CubeGrid);
-            foreach (var grid in grids)
-            {
-                var candidates = new List<IMyGasTank>();
-                MyAPIGateway.TerminalActionsHelper.GetTerminalSystemForGrid(grid).GetBlocksOfType(candidates);
-                foreach (var candidate in candidates)
-                {
-                    var isOxygen = candidate.BlockDefinition.SubtypeName == "" || candidate.BlockDefinition.SubtypeName.Contains("Oxygen");
-                    var isStokpile = candidate.Stockpile;
-                    var alreadyFound = result.Contains(candidate);
-                    if (isOxygen & !isStokpile & !alreadyFound)
-                    {
-                        result.Add(candidate);
-                    }
-                }
-            }
-
-            return result;
-        }
-
         List<IMyCubeGrid> FindSubgrids(IMyCubeGrid root)
         {
             var visited = new List<IMyCubeGrid>();
@@ -228,7 +205,7 @@ namespace TSUT.H2Real
 
                 if (_engine.DisplayNameText.Contains("debug"))
                 {
-                    MyAPIGateway.Utilities.ShowMessage("[H2Real.Engine]", $"O2 to consume: {shouldBeConsumed:F4}, Enough: {enoughO2}");
+                    MyLog.Default.WriteLine($"[H2Real.Engine] O2 to consume: {shouldBeConsumed:F4}, Enough: {enoughO2}");
                 }
 
                 if (enoughO2)
@@ -241,7 +218,7 @@ namespace TSUT.H2Real
             {
                 if (_engine.DisplayNameText.Contains("debug"))
                 {
-                    MyAPIGateway.Utilities.ShowMessage("[H2Real.Engine]", $"Switch {Block.DisplayNameText} state: {_engine.Enabled:F4} -> {newState}");
+                    MyLog.Default.WriteLine($"[H2Real.Engine] Switch {Block.DisplayNameText} state: {_engine.Enabled:F4} -> {newState}");
                 }
                 _nextCallINternal = true;
                 _engine.Enabled = newState;
