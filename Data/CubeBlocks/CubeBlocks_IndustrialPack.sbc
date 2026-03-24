@@ -157,7 +157,7 @@
             <EdgeType>Light</EdgeType>
             <BuildTimeSeconds>40</BuildTimeSeconds>
             <ResourceSinkGroup>Thrust</ResourceSinkGroup>
-            <ForceMagnitude>1080000</ForceMagnitude>
+            <ForceMagnitude>510000</ForceMagnitude>
             <SlowdownFactor>1</SlowdownFactor>
             <FuelConverter>
                 <FuelId>
@@ -359,7 +359,7 @@
             <EdgeType>Light</EdgeType>
             <BuildTimeSeconds>10</BuildTimeSeconds>
             <ResourceSinkGroup>Thrust</ResourceSinkGroup>
-            <ForceMagnitude>98400</ForceMagnitude>
+            <ForceMagnitude>46500</ForceMagnitude>
             <FuelConverter>
                 <FuelId>
                     <TypeId>GasProperties</TypeId>
