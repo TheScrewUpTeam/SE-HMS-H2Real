@@ -152,7 +152,7 @@
 			<ResourceSinkGroup>Generators</ResourceSinkGroup>
 			<ResourceSourceGroup>Reactors</ResourceSourceGroup>
 			<MaxPowerOutput>0.5</MaxPowerOutput>
-			<FuelCapacity>5000</FuelCapacity>
+			<FuelCapacity>500</FuelCapacity>
 			<IsAirTight>false</IsAirTight>
 			<InventorySize>
 				<X>1</X>
