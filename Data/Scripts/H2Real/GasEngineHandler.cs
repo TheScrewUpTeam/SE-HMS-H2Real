@@ -21,6 +21,7 @@ namespace TSUT.H2Real
         const int ONE_MILLION = 1000000;
         bool _switchSubscribed = false;
         bool _nextCallINternal = false;
+        float _cachedConsumption = 0f;
 
         public GasEngineHandler(IMyPowerProducer block, HmsApi api) : base(block)
         {
@@ -124,7 +125,7 @@ namespace TSUT.H2Real
                 return 0f;
 
             var hydrogenId = new MyDefinitionId(typeof(MyObjectBuilder_GasProperties), "Hydrogen");
-            var currentConsumption = sink.CurrentInputByType(hydrogenId);
+            var currentConsumption = sink.CurrentInputByType(hydrogenId) / 5;
 
             return currentConsumption; // L/s
         }
@@ -200,13 +201,14 @@ namespace TSUT.H2Real
 
             if (_playerWantsOn)
             {
-                float shouldBeConsumed = GetCurrentO2ConsumptionInt() * deltaTime;
-                bool enoughO2 = _api.Utils.HasEnoughO2(shouldBeConsumed, deltaTime, Block);
-
-                if (_engine.DisplayNameText.Contains("debug"))
+                float consumptionPerSecond = GetCurrentO2ConsumptionInt();
+                if (consumptionPerSecond != 0f)
                 {
-                    MyLog.Default.WriteLine($"[H2Real.Engine] O2 to consume: {shouldBeConsumed:F4}, Enough: {enoughO2}");
+                    _cachedConsumption = consumptionPerSecond;
                 }
+                bool enoughO2 = _api.Utils.HasEnoughO2(_cachedConsumption * deltaTime, deltaTime, Block);
+
+                float shouldBeConsumed = _cachedConsumption * deltaTime;
 
                 if (enoughO2)
                 {
@@ -216,10 +218,6 @@ namespace TSUT.H2Real
 
             if (_engine.Enabled != newState)
             {
-                if (_engine.DisplayNameText.Contains("debug"))
-                {
-                    MyLog.Default.WriteLine($"[H2Real.Engine] Switch {Block.DisplayNameText} state: {_engine.Enabled:F4} -> {newState}");
-                }
                 _nextCallINternal = true;
                 _engine.Enabled = newState;
             }

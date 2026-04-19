@@ -23,6 +23,7 @@ namespace TSUT.H2Real
         const int ONE_MILLION = 1000000;
         bool _switchSubscribed = false;
         bool _nextCallINternal = false;
+        float _cachedConsumption = 0f;
 
         public HydrogenThrusterHandler(IMyThrust block, HmsApi api) : base(block)
         {
@@ -241,9 +242,16 @@ namespace TSUT.H2Real
             var newState = false;
             if (_playerWnatsOn)
             {
-                float shouldBeConsumed = GetCurrentO2Consumption() * deltaTime;
+                float consumptionPerSecond = GetCurrentO2Consumption();
+                if (consumptionPerSecond != 0f)
+                {
+                    _cachedConsumption = consumptionPerSecond;
+                }
                 // bool enoughO2 = ConsumeO2(shouldBeConsumed);
-                bool enoughO2 = _api.Utils.HasEnoughO2(shouldBeConsumed, deltaTime, Block);
+                bool enoughO2 = _api.Utils.HasEnoughO2(_cachedConsumption * deltaTime, deltaTime, Block);
+
+                float shouldBeConsumed = GetCurrentO2Consumption() * deltaTime;
+
                 if (enoughO2) {
                     newState = _api.Utils.ConsumeO2(shouldBeConsumed, deltaTime, Block) <= 0;
                 }
