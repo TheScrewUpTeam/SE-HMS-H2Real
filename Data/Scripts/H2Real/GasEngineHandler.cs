@@ -202,17 +202,23 @@ namespace TSUT.H2Real
             if (_playerWantsOn)
             {
                 float consumptionPerSecond = GetCurrentO2ConsumptionInt();
-                if (consumptionPerSecond != 0f)
+                if (consumptionPerSecond > 0f && !float.IsNaN(consumptionPerSecond) && !float.IsInfinity(consumptionPerSecond))
                 {
                     _cachedConsumption = consumptionPerSecond;
                 }
-                bool enoughO2 = _api.Utils.HasEnoughO2(_cachedConsumption * deltaTime, deltaTime, Block);
 
-                float shouldBeConsumed = _cachedConsumption * deltaTime;
-
-                if (enoughO2)
+                if (_cachedConsumption > 0f)
                 {
-                    newState = _api.Utils.ConsumeO2(shouldBeConsumed, deltaTime, Block) <= 0;
+                    float shouldBeConsumed = _cachedConsumption * deltaTime;
+                    bool enoughO2 = _api.Utils.HasEnoughO2(shouldBeConsumed, deltaTime, Block);
+                    if (enoughO2)
+                    {
+                        newState = _api.Utils.ConsumeO2(shouldBeConsumed, deltaTime, Block) <= 0;
+                    }
+                }
+                else
+                {
+                    newState = true;
                 }
             }
 
