@@ -1,53 +1,62 @@
 using System.Collections.Generic;
 using System.Text;
+using Sandbox.Common.ObjectBuilders;
 using Sandbox.Game;
 using Sandbox.Game.EntityComponents;
 using Sandbox.ModAPI;
 using Sandbox.ModAPI.Interfaces.Terminal;
 using TSUT.HeatManagement;
 using VRage.Game;
+using VRage.Game.Components;
 using VRage.Game.ModAPI;
 using VRage.Game.ObjectBuilders.Definitions;
+using VRage.ObjectBuilders;
 using VRage.Utils;
 using static TSUT.HeatManagement.HmsApi;
 
 namespace TSUT.H2Real
 {
-    public class GasEngineHandler : AHeatBehavior
+    [MyEntityComponentDescriptor(typeof(MyObjectBuilder_HydrogenEngine), false)]
+    public class GasEngineController : AHmsBlockComponent
     {
         IMyPowerProducer _engine;
-        HmsApi _api;
         bool _playerWantsOn;
         const int ONE_MILLION = 1000000;
         bool _switchSubscribed = false;
-        bool _nextCallINternal = false;
+        bool _nextCallInternal = false;
         float _cachedConsumption = 0f;
 
-        public GasEngineHandler(IMyPowerProducer block, HmsApi api) : base(block)
+        public override void Init(MyObjectBuilder_EntityBase objectBuilder)
         {
-            _api = api;
-            _engine = block;
+            base.Init(objectBuilder);
+            _engine = (IMyPowerProducer)Entity;
             _engine.AppendingCustomInfo += AppendHeatInfo;
             _playerWantsOn = _engine.Enabled;
-            TrackOnSwitch();
-            _engine.RefreshCustomInfo();
-            _engine.SetDetailedInfoDirty();
-            block.EnabledChanged += Block_EnabledChanged;
+            MyAPIGateway.TerminalControls.CustomControlGetter += OnCustomControlGetter;
+            _engine.EnabledChanged += Block_EnabledChanged;
         }
+
+        public override void Close()
+        {
+            if (_engine != null)
+            {
+                _engine.AppendingCustomInfo -= AppendHeatInfo;
+                _engine.EnabledChanged -= Block_EnabledChanged;
+                MyAPIGateway.TerminalControls.CustomControlGetter -= OnCustomControlGetter;
+            }
+            base.Close();
+        }
+
+        public override void OnDetachedFromHeatSystem() { }
 
         private void Block_EnabledChanged(IMyTerminalBlock block)
         {
-            if (_nextCallINternal)
+            if (_nextCallInternal)
             {
-                _nextCallINternal = false;
+                _nextCallInternal = false;
                 return;
             }
             _playerWantsOn = (block as IMyFunctionalBlock).Enabled;
-        }
-
-        private void TrackOnSwitch()
-        {
-            MyAPIGateway.TerminalControls.CustomControlGetter += OnCustomControlGetter;
         }
 
         private void OnCustomControlGetter(IMyTerminalBlock topBlock, List<IMyTerminalControl> controls)
@@ -71,7 +80,6 @@ namespace TSUT.H2Real
                         {
                             if (block != _engine)
                                 return;
-
                             _playerWantsOn = value;
                         };
                         _switchSubscribed = true;
@@ -80,86 +88,42 @@ namespace TSUT.H2Real
             }
         }
 
-        List<IMyCubeGrid> FindSubgrids(IMyCubeGrid root)
-        {
-            var visited = new List<IMyCubeGrid>();
-            var stack = new List<IMyCubeGrid>
-            {
-                root
-            };
-
-            while (stack.Count > 0)
-            {
-                var grid = stack.Pop();
-                if (grid == null)
-                    continue;
-                if (visited.Contains(grid))
-                    continue;
-
-                visited.Add(grid);
-
-                var motors = grid.GetFatBlocks<IMyMotorStator>();
-                foreach (var block in motors)
-                {
-                    stack.Add(block?.TopGrid);
-                }
-                var pistons = grid.GetFatBlocks<IMyPistonBase>();
-                foreach (var block in pistons)
-                {
-                    stack.Add(block?.TopGrid);
-                }
-                var connectors = grid.GetFatBlocks<IMyShipConnector>();
-                foreach (var block in connectors)
-                {
-                    stack.Add(block?.OtherConnector?.CubeGrid);
-                }
-            }
-
-            return visited;
-        }
-
         float GetCurrentH2Consumption()
         {
             var sink = _engine?.Components.Get<MyResourceSinkComponent>();
             if (sink == null)
                 return 0f;
-
             var hydrogenId = new MyDefinitionId(typeof(MyObjectBuilder_GasProperties), "Hydrogen");
-            var currentConsumption = sink.CurrentInputByType(hydrogenId) / 5;
-
-            return currentConsumption; // L/s
+            return sink.CurrentInputByType(hydrogenId) / 5;
         }
 
-        float GetCurrentO2ConsumptionInt()
+        float GetCurrentO2Consumption()
         {
-            var result = GetCurrentH2Consumption() * Config.Instance.O2_USAGE_FROM_H2_ENGINE;
-            return result;
+            return GetCurrentH2Consumption() * Config.Instance.O2_USAGE_FROM_H2_ENGINE;
         }
 
         private void AppendHeatInfo(IMyTerminalBlock block, StringBuilder builder)
         {
+            if (Api?.Utils == null) return;
             float currentH2Consumption = GetCurrentH2Consumption();
-            float currentO2Consumption = GetCurrentO2ConsumptionInt();
-            float currentHeat = _api.Utils.GetHeat(_engine);
-            float blockCapacity = _api.Utils.GetThermalCapacity(_engine);
+            float currentO2Consumption = GetCurrentO2Consumption();
+            float currentHeat = Api.Utils.GetHeat(_engine);
+            float blockCapacity = Api.Utils.GetThermalCapacity(_engine);
 
-            float internalUse = CalculateHeat(currentH2Consumption) / blockCapacity; // °C/s
+            float internalUse = CalculateHeat(currentH2Consumption) / blockCapacity;
 
             float neighborExchange;
             float networkExchange;
-
             var neighborInfo = new StringBuilder();
 
             AddNeighborAndNetworksInfo(
-                block,
-                _api,
                 neighborInfo,
                 out neighborExchange,
                 out networkExchange
             );
 
             float currentPower = _engine.CurrentOutput;
-            float heatChange = GetHeatChange(1f) + neighborExchange + networkExchange; // Assuming deltaTime of 1 second for display purposes
+            float heatChange = GetHeatChange(1f) + neighborExchange + networkExchange;
 
             builder.AppendLine($"Current Power Output: {currentPower:F2} MW");
             builder.AppendLine("--- HMS.H2Real ---");
@@ -174,47 +138,37 @@ namespace TSUT.H2Real
             builder.AppendLine("");
             builder.AppendLine("Heat sources:");
             builder.AppendLine($"  Internal use: {internalUse:F2} °C/s");
-            builder.AppendLine($"  Air Exchange: {-_api.Utils.GetAmbientHeatLoss(block, 1):+0.00;-0.00;0.00} °C/s");
+            builder.AppendLine($"  Air Exchange: {-Api.Utils.GetAmbientHeatLoss(block, 1):+0.00;-0.00;0.00} °C/s");
             builder.Append(neighborInfo);
-        }
-
-        public override void Cleanup()
-        {
-            _engine.AppendingCustomInfo -= AppendHeatInfo;
-            MyAPIGateway.TerminalControls.CustomControlGetter -= OnCustomControlGetter;
         }
 
         public float CalculateHeat(float consumption)
         {
-            float chemicalPower = Config.Instance.ENERGY_PER_LITER * consumption; // J/s
-            float heatPower = chemicalPower * (1 - Config.Instance.H2_ENGINE_EFFICIENCY); // J/s (Watts)
+            float chemicalPower = Config.Instance.ENERGY_PER_LITER * consumption;
+            float heatPower = chemicalPower * (1 - Config.Instance.H2_ENGINE_EFFICIENCY);
             return heatPower;
         }
 
         public override float GetHeatChange(float deltaTime)
         {
             float tempChange = 0f;
-            tempChange -= _api.Utils.GetAmbientHeatLoss(_engine, deltaTime);
+            tempChange -= Api.Utils.GetAmbientHeatLoss(_engine, deltaTime);
 
             float currentH2Consumption = GetCurrentH2Consumption();
             var newState = false;
 
             if (_playerWantsOn)
             {
-                float consumptionPerSecond = GetCurrentO2ConsumptionInt();
+                float consumptionPerSecond = GetCurrentO2Consumption();
                 if (consumptionPerSecond > 0f && !float.IsNaN(consumptionPerSecond) && !float.IsInfinity(consumptionPerSecond))
-                {
                     _cachedConsumption = consumptionPerSecond;
-                }
 
                 if (_cachedConsumption > 0f)
                 {
                     float shouldBeConsumed = _cachedConsumption * deltaTime;
-                    bool enoughO2 = _api.Utils.HasEnoughO2(shouldBeConsumed, deltaTime, Block);
+                    bool enoughO2 = Api.Utils.HasEnoughO2(shouldBeConsumed, deltaTime, Block);
                     if (enoughO2)
-                    {
-                        newState = _api.Utils.ConsumeO2(shouldBeConsumed, deltaTime, Block) <= 0;
-                    }
+                        newState = Api.Utils.ConsumeO2(shouldBeConsumed, deltaTime, Block) <= 0;
                 }
                 else
                 {
@@ -224,11 +178,11 @@ namespace TSUT.H2Real
 
             if (_engine.Enabled != newState)
             {
-                _nextCallINternal = true;
+                _nextCallInternal = true;
                 _engine.Enabled = newState;
             }
 
-            float capacity = _api.Utils.GetThermalCapacity(_engine);
+            float capacity = Api.Utils.GetThermalCapacity(_engine);
             if (capacity <= 0f)
                 return 0f;
             tempChange += CalculateHeat(currentH2Consumption * deltaTime) / capacity;
@@ -243,25 +197,23 @@ namespace TSUT.H2Real
             var damage = integrity * Config.Instance.DAMAGE_PERCENT_ON_VERHEAT;
             slimBlock.DoDamage(damage, MyDamageType.Explosion, true);
             MyVisualScriptLogicProvider.PlaySingleSoundAtEntity(
-                "ArcWepSmallMissileExplShip",    // sound subtypeId from Audio.sbc
+                "ArcWepSmallMissileExplShip",
                 _engine.Name
             );
         }
 
         public override void ReactOnNewHeat(float heat)
         {
-            _api.Effects.UpdateBlockHeatLight(_engine, heat);
+            Api.Effects.UpdateBlockHeatLight(_engine, heat);
             _engine.SetDetailedInfoDirty();
             _engine.RefreshCustomInfo();
             if (heat >= Config.Instance.H2_ENGINE_CRITICAL_TEMP && _engine.IsFunctional)
-            {
                 DamageEngine();
-            }
         }
 
         public override void SpreadHeat(float deltaTime)
         {
-            SpreadHeatStandard(deltaTime, _engine, _api);
+            SpreadHeatStandard(deltaTime);
         }
     }
 }
