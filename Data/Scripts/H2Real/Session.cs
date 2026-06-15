@@ -10,6 +10,7 @@ namespace TSUT.H2Real
         protected override void UnloadData()
         {
             HmsApi.Instance?.Cleanup();
+            HydrogenThrusterController.ResetStatics();
         }
 
         public override void SaveData()
