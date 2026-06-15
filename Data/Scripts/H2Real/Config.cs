@@ -6,14 +6,14 @@ namespace TSUT.HeatManagement
 {
     public class Config
     {
-        public static string Version = "1.0.1";
+        public static string Version = "1.0.2";
 
-        public string SYSTEM_VERSION = "1.0.1";
+        public string SYSTEM_VERSION = "1.0.2";
         public bool SYSTEM_AUTO_UPDATE = true;
         public float O2_USAGE_FROM_H2_THRUSTER { get; set; } = .5f; // Liters of O2 used per two liter of H2 for thrusters
         public float O2_USAGE_FROM_H2_ENGINE { get; set; } = .5f; // Liters of O2 used per two liter of H2 for engines
         public float ICE_MELTING_ENERGY_PER_KG { get; set; } = 334000f; // W
-        public float GAS_COMPRESSION_POWER_FULL_PER_LITER { get; set; } = 500f; // W
+        public float GAS_COMPRESSION_POWER_FULL_PER_LITER { get; set; } = 2.4f; // kW per L/s of gas production rate
         public float ENERGY_PER_LITER { get; set; } = 1495.0f; // J/L
         public float H2_THRUST_EFFICIENCY { get; set; } = 0.65f; // Efficiency of H2 thrusters
         public float H2_ENGINE_EFFICIENCY { get; set; } = 0.65f; // Efficiency of H2 engines (typical ICE efficiency)
@@ -88,7 +88,7 @@ namespace TSUT.HeatManagement
             }
             catch (Exception e)
             {
-                MyLog.Default.Warning("H2Real", $"Failed to save config: {e.Message}");
+                MyLog.Default.Warning($"[H2Real] Failed to save config: {e.Message}");
             }
         }
     }

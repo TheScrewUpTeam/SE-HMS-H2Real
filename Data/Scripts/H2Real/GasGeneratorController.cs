@@ -18,24 +18,90 @@ namespace TSUT.H2Real
     [MyEntityComponentDescriptor(typeof(MyObjectBuilder_OxygenGenerator), false)]
     public class GasGeneratorController : AHmsBlockComponent
     {
-        IMyGasGenerator _generator;
+        private IMyGasGenerator Generator => Entity as IMyGasGenerator;
         const int ONE_MILLION = 1000000;
 
-        public override void Init(MyObjectBuilder_EntityBase objectBuilder)
+        private readonly List<IMyGasTank> _connectedTanks = new List<IMyGasTank>();
+        private bool _tanksDirty = true;
+
+        private float _coldMeltingPower;
+        private float _coldThresholdTemp;
+        private bool _isHot;
+        private float _lastCompressionPower;
+
+        protected override void OnHmsInit()
         {
-            base.Init(objectBuilder);
-            _generator = (IMyGasGenerator)Entity;
-            _generator.AppendingCustomInfo += AppendHeatInfo;
+            var gen = Generator;
+            var def = gen.SlimBlock.BlockDefinition as MyOxygenGeneratorDefinition;
+            float blockCapacity = Api.Utils.GetThermalCapacity(gen);
+
+            _coldMeltingPower = (def?.IceConsumptionPerSecond ?? 0f) * Config.Instance.ICE_MELTING_ENERGY_PER_KG / ONE_MILLION;
+            _coldThresholdTemp = blockCapacity > 0f
+                ? (def?.IceConsumptionPerSecond ?? 0f) * Config.Instance.ICE_MELTING_ENERGY_PER_KG / blockCapacity
+                : float.MaxValue;
+            _isHot = Api.Utils.GetHeat(gen) >= _coldThresholdTemp;
+            _lastCompressionPower = 0f;
+
+            UpdateMultiplier(0f);
+
+            gen.AppendingCustomInfo += AppendHeatInfo;
+            GridGasPressureCache.GetOrCreate(gen.CubeGrid).Register(this);
         }
 
         public override void Close()
         {
-            if (_generator != null)
-                _generator.AppendingCustomInfo -= AppendHeatInfo;
+            var gen = Generator;
+            if (gen != null)
+            {
+                gen.AppendingCustomInfo -= AppendHeatInfo;
+                ((Sandbox.ModAPI.IMyGasGenerator)gen).PowerConsumptionMultiplier = 1f;
+                GridGasPressureCache cache;
+                if (GridGasPressureCache.TryGet(gen.CubeGrid, out cache))
+                    cache.Unregister(this);
+            }
             base.Close();
         }
 
         public override void OnDetachedFromHeatSystem() { }
+
+        public void InvalidateTankCache()
+        {
+            _tanksDirty = true;
+        }
+
+        private void UpdateMultiplier(float compressionPower)
+        {
+            var gen = Generator;
+            if (gen == null) return;
+            var def = gen.SlimBlock.BlockDefinition as MyOxygenGeneratorDefinition;
+            float standard = def?.OperationalPowerConsumption ?? 0f;
+            if (standard <= 0f) return;
+            float coldExtra = _isHot ? 0f : _coldMeltingPower;
+            ((Sandbox.ModAPI.IMyGasGenerator)gen).PowerConsumptionMultiplier = (standard + coldExtra + compressionPower) / standard;
+        }
+
+        private void RebuildConnectedTanks()
+        {
+            _connectedTanks.Clear();
+            var gen = Generator;
+            if (gen == null) { _tanksDirty = false; return; }
+
+            var genInv = gen.GetInventory(0);
+            if (genInv == null) { _tanksDirty = false; return; }
+
+            var termSystem = MyAPIGateway.TerminalActionsHelper.GetTerminalSystemForGrid(gen.CubeGrid);
+            if (termSystem == null) { _tanksDirty = false; return; }
+
+            var allTanks = new List<IMyGasTank>();
+            termSystem.GetBlocksOfType(allTanks);
+            foreach (var tank in allTanks)
+            {
+                var tankInv = tank.GetInventory(0);
+                if (tankInv != null && genInv.IsConnectedTo(tankInv))
+                    _connectedTanks.Add(tank);
+            }
+            _tanksDirty = false;
+        }
 
         private void AppendHeatInfo(IMyTerminalBlock block, StringBuilder builder)
         {
@@ -67,7 +133,7 @@ namespace TSUT.H2Real
             {
                 standardConsumption = def != null ? def.OperationalPowerConsumption : 0f;
                 processedIceKg = CalculateMelting(1, ref meltingPower, ref temperatureChange);
-                compressionPower = CalculateCompression(processedIceKg);
+                compressionPower = CalculateCompression();
             }
 
             float heatChange = GetHeatChange(1f) + neighborExchange + networkExchange;
@@ -113,74 +179,80 @@ namespace TSUT.H2Real
 
         public override float GetHeatChange(float deltaTime)
         {
-            if (!_generator.IsWorking)
+            if (!Generator.IsWorking)
                 return 0;
 
-            var sink = _generator.Components.Get<MyResourceSinkComponent>();
-            if (sink == null)
-                return 0;
-
-            var def = _generator.SlimBlock.BlockDefinition as MyOxygenGeneratorDefinition;
+            var def = Generator.SlimBlock.BlockDefinition as MyOxygenGeneratorDefinition;
             if (def == null)
                 return 0f;
 
-            var standardConsumption = _generator.IsProducing ? def.OperationalPowerConsumption : 0;
+            if (Generator.DisplayNameText.Contains("debug"))
+                MyLog.Default.WriteLine($"[H2Real] Start processing {Generator.DisplayNameText} with {Api.Utils.GetHeat(Generator)}C ");
 
-            if (_generator.DisplayNameText.Contains("debug"))
-                MyLog.Default.WriteLine($"[H2Real] Start processing {_generator.DisplayNameText} with {Api.Utils.GetHeat(_generator)}C ");
-
-            float extraPower = 0;
+            float unusedPower = 0;
             float usedTemperature = 0;
-            float processedIceKg = CalculateMelting(deltaTime, ref extraPower, ref usedTemperature);
+            float processedIceKg = CalculateMelting(deltaTime, ref unusedPower, ref usedTemperature);
 
-            if (_generator.DisplayNameText.Contains("debug"))
+            if (Generator.DisplayNameText.Contains("debug"))
                 MyLog.Default.WriteLine($"[H2Real] Ice processing: {usedTemperature:F4}");
 
-            extraPower += CalculateCompression(processedIceKg);
-            usedTemperature -= Api.Utils.GetAmbientHeatLoss(_generator, deltaTime);
+            usedTemperature -= Api.Utils.GetAmbientHeatLoss(Generator, deltaTime);
 
-            if (_generator.DisplayNameText.Contains("debug"))
-                MyLog.Default.WriteLine($"[H2Real] Amb exchange: {usedTemperature:F4}");
+            if (Generator.DisplayNameText.Contains("debug"))
+                MyLog.Default.WriteLine($"[H2Real] Amb exchange: {usedTemperature:F4} Internal temperature change: {usedTemperature:F4}");
 
-            var previous = sink.RequiredInputByType(MyResourceDistributorComponent.ElectricityId);
-            var current = standardConsumption + extraPower;
-            if (current != previous)
-                sink.SetRequiredInputByType(MyResourceDistributorComponent.ElectricityId, current);
-
-            if (_generator.DisplayNameText.Contains("debug"))
-                MyLog.Default.WriteLine($"[H2Real] Internal temperature change: {usedTemperature:F4}");
+            _lastCompressionPower = CalculateCompression();
+            UpdateMultiplier(_lastCompressionPower);
 
             return usedTemperature;
         }
 
-        private float CalculateCompression(float processedIceKg)
+        private float CalculateCompression()
         {
-            var def = _generator.SlimBlock.BlockDefinition as MyOxygenGeneratorDefinition;
-            if (def == null)
+            var def = Generator.SlimBlock.BlockDefinition as MyOxygenGeneratorDefinition;
+            if (def == null || !Generator.IsProducing)
                 return 0f;
 
-            float energy = 0;
+            if (_tanksDirty)
+                RebuildConnectedTanks();
+
+            float power = 0;
             foreach (var gas in def.ProducedGases)
             {
-                float tanksFilled = GetConnectedHydrogenFill(gas.Id.SubtypeName);
-                float production = gas.IceToGasRatio * processedIceKg;
-                energy += production * Config.Instance.GAS_COMPRESSION_POWER_FULL_PER_LITER * tanksFilled / ONE_MILLION;
+                float tanksFilled = GetConnectedGasFill(gas.Id.SubtypeName);
+                float productionRate = gas.IceToGasRatio * def.IceConsumptionPerSecond;
+                power += productionRate * Config.Instance.GAS_COMPRESSION_POWER_FULL_PER_LITER * tanksFilled / 1000f;
             }
 
-            return energy;
+            return power;
+        }
+
+        private float GetConnectedGasFill(string gasSubtype)
+        {
+            double totalCapacity = 0;
+            double totalStored = 0;
+            foreach (var tank in _connectedTanks)
+            {
+                if (!tank.IsWorking || !tank.BlockDefinition.SubtypeId.Contains(gasSubtype))
+                    continue;
+                double capacity = tank.Capacity;
+                totalCapacity += capacity;
+                totalStored += capacity * tank.FilledRatio;
+            }
+            return totalCapacity <= 0 ? 0f : (float)(totalStored / totalCapacity);
         }
 
         private float CalculateMelting(float deltaTime, ref float extraPower, ref float usedTemperature)
         {
-            if (!_generator.IsProducing)
+            if (!Generator.IsProducing)
                 return 0;
 
-            var def = _generator.SlimBlock.BlockDefinition as MyOxygenGeneratorDefinition;
+            var def = Generator.SlimBlock.BlockDefinition as MyOxygenGeneratorDefinition;
             if (def == null)
                 return 0f;
 
-            float currentTemp = Api.Utils.GetHeat(_generator);
-            float blockCapacity = Api.Utils.GetThermalCapacity(_generator);
+            float currentTemp = Api.Utils.GetHeat(Generator);
+            float blockCapacity = Api.Utils.GetThermalCapacity(Generator);
 
             float storedEnergy = currentTemp * blockCapacity;
             float processedIceKg = def.IceConsumptionPerSecond * deltaTime;
@@ -202,42 +274,19 @@ namespace TSUT.H2Real
 
         public override void ReactOnNewHeat(float heat)
         {
-            _generator.SetDetailedInfoDirty();
-            _generator.RefreshCustomInfo();
+            bool nowHot = Api.Utils.GetHeat(Generator) >= _coldThresholdTemp;
+            if (nowHot != _isHot)
+            {
+                _isHot = nowHot;
+                UpdateMultiplier(_lastCompressionPower);
+            }
+            Generator.SetDetailedInfoDirty();
+            Generator.RefreshCustomInfo();
         }
 
         public override void SpreadHeat(float deltaTime)
         {
             SpreadHeatStandard(deltaTime);
-        }
-
-        private float GetConnectedHydrogenFill(string type)
-        {
-            var terminalSystem = MyAPIGateway.TerminalActionsHelper.GetTerminalSystemForGrid(_generator.CubeGrid);
-            if (terminalSystem == null)
-                return 0f;
-
-            var tanks = new List<IMyGasTank>();
-            terminalSystem.GetBlocksOfType(tanks, t => t.BlockDefinition.SubtypeId.Contains(type));
-
-            double totalCapacity = 0;
-            double totalStored = 0;
-
-            foreach (var tank in tanks)
-            {
-                if (tank.IsWorking)
-                {
-                    double capacity = tank.Capacity;
-                    double filled = capacity * tank.FilledRatio;
-                    totalCapacity += capacity;
-                    totalStored += filled;
-                }
-            }
-
-            if (totalCapacity <= 0)
-                return 0f;
-
-            return (float)(totalStored / totalCapacity);
         }
     }
 }
