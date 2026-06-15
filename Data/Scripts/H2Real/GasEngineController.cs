@@ -1,15 +1,15 @@
+using System;
 using System.Collections.Generic;
 using System.Text;
 using Sandbox.Common.ObjectBuilders;
+using Sandbox.Definitions;
 using Sandbox.Game;
-using Sandbox.Game.EntityComponents;
 using Sandbox.ModAPI;
 using Sandbox.ModAPI.Interfaces.Terminal;
 using TSUT.HeatManagement;
 using VRage.Game;
 using VRage.Game.Components;
 using VRage.Game.ModAPI;
-using VRage.Game.ObjectBuilders.Definitions;
 using VRage.ObjectBuilders;
 using VRage.Utils;
 using static TSUT.HeatManagement.HmsApi;
@@ -22,9 +22,17 @@ namespace TSUT.H2Real
         IMyPowerProducer _engine;
         bool _playerWantsOn;
         const int ONE_MILLION = 1000000;
-        bool _switchSubscribed = false;
-        bool _nextCallInternal = false;
         float _cachedConsumption = 0f;
+
+        static bool _staticInitDone = false;
+        static Func<IMyTerminalBlock, bool> _origOnOffGetter;
+        static Action<IMyTerminalBlock, bool> _origOnOffSetter;
+        static Action<IMyTerminalBlock> _origToggleAction;
+        static Action<IMyTerminalBlock> _origOnAction;
+        static Action<IMyTerminalBlock> _origOffAction;
+
+        static GasEngineController Get(IMyTerminalBlock b)
+            => b.GameLogic.GetAs<GasEngineController>();
 
         public override void Init(MyObjectBuilder_EntityBase objectBuilder)
         {
@@ -32,69 +40,120 @@ namespace TSUT.H2Real
             _engine = (IMyPowerProducer)Entity;
             _engine.AppendingCustomInfo += AppendHeatInfo;
             _playerWantsOn = _engine.Enabled;
-            MyAPIGateway.TerminalControls.CustomControlGetter += OnCustomControlGetter;
-            _engine.EnabledChanged += Block_EnabledChanged;
+
+            if (!_staticInitDone)
+            {
+                _staticInitDone = true;
+                PatchControlsAndActions();
+            }
         }
 
         public override void Close()
         {
             if (_engine != null)
-            {
                 _engine.AppendingCustomInfo -= AppendHeatInfo;
-                _engine.EnabledChanged -= Block_EnabledChanged;
-                MyAPIGateway.TerminalControls.CustomControlGetter -= OnCustomControlGetter;
-            }
             base.Close();
         }
 
-        public override void OnDetachedFromHeatSystem() { }
-
-        private void Block_EnabledChanged(IMyTerminalBlock block)
+        static void PatchControlsAndActions()
         {
-            if (_nextCallInternal)
-            {
-                _nextCallInternal = false;
-                return;
-            }
-            _playerWantsOn = (block as IMyFunctionalBlock).Enabled;
-        }
-
-        private void OnCustomControlGetter(IMyTerminalBlock topBlock, List<IMyTerminalControl> controls)
-        {
-            if (topBlock != _engine || _switchSubscribed)
-                return;
+            List<IMyTerminalControl> controls;
+            MyAPIGateway.TerminalControls.GetControls<IMyFunctionalBlock>(out controls);
             foreach (var control in controls)
             {
-                if (control.Id == "OnOff")
+                if (control.Id != "OnOff") continue;
+                var onOff = control as IMyTerminalControlOnOffSwitch;
+                if (onOff == null) break;
+                _origOnOffGetter = onOff.Getter;
+                _origOnOffSetter = onOff.Setter;
+                onOff.Getter = OnOffGetter;
+                onOff.Setter = OnOffSetter;
+                break;
+            }
+
+            List<IMyTerminalAction> actions;
+            MyAPIGateway.TerminalControls.GetActions<IMyFunctionalBlock>(out actions);
+            foreach (var action in actions)
+            {
+                switch (action.Id)
                 {
-                    var onOffControl = control as IMyTerminalControlOnOffSwitch;
-                    if (onOffControl != null)
-                    {
-                        onOffControl.Getter += (block) =>
-                        {
-                            if (block == _engine)
-                                return _playerWantsOn;
-                            return (block as IMyFunctionalBlock).Enabled;
-                        };
-                        onOffControl.Setter += (block, value) =>
-                        {
-                            if (block != _engine)
-                                return;
-                            _playerWantsOn = value;
-                        };
-                        _switchSubscribed = true;
-                    }
+                    case "OnOff":
+                        _origToggleAction = action.Action;
+                        action.Action = OnToggleAction;
+                        break;
+                    case "OnOff_On":
+                        _origOnAction = action.Action;
+                        action.Action = OnOnAction;
+                        break;
+                    case "OnOff_Off":
+                        _origOffAction = action.Action;
+                        action.Action = OnOffAction;
+                        break;
                 }
             }
         }
 
+        public static void ResetStatics()
+        {
+            _staticInitDone = false;
+            _origOnOffGetter = null;
+            _origOnOffSetter = null;
+            _origToggleAction = null;
+            _origOnAction = null;
+            _origOffAction = null;
+        }
+
+        static bool OnOffGetter(IMyTerminalBlock block)
+        {
+            var ctrl = Get(block);
+            return ctrl != null
+                ? ctrl._playerWantsOn
+                : _origOnOffGetter?.Invoke(block) ?? (block as IMyFunctionalBlock)?.Enabled ?? false;
+        }
+
+        static void OnOffSetter(IMyTerminalBlock block, bool value)
+        {
+            var ctrl = Get(block);
+            if (ctrl != null)
+                ctrl._playerWantsOn = value;
+            else
+                _origOnOffSetter?.Invoke(block, value);
+        }
+
+        static void OnToggleAction(IMyTerminalBlock block)
+        {
+            var ctrl = Get(block);
+            if (ctrl != null)
+                ctrl._playerWantsOn = !ctrl._playerWantsOn;
+            else
+                _origToggleAction?.Invoke(block);
+        }
+
+        static void OnOnAction(IMyTerminalBlock block)
+        {
+            var ctrl = Get(block);
+            if (ctrl != null)
+                ctrl._playerWantsOn = true;
+            else
+                _origOnAction?.Invoke(block);
+        }
+
+        static void OnOffAction(IMyTerminalBlock block)
+        {
+            var ctrl = Get(block);
+            if (ctrl != null)
+                ctrl._playerWantsOn = false;
+            else
+                _origOffAction?.Invoke(block);
+        }
+
+        public override void OnDetachedFromHeatSystem() { }
+
         float GetCurrentH2Consumption()
         {
-            var sink = _engine?.Components.Get<MyResourceSinkComponent>();
-            if (sink == null)
-                return 0f;
-            var hydrogenId = new MyDefinitionId(typeof(MyObjectBuilder_GasProperties), "Hydrogen");
-            return sink.CurrentInputByType(hydrogenId) / 5;
+            var def = _engine?.SlimBlock.BlockDefinition as MyGasFueledPowerProducerDefinition;
+            if (def == null || def.FuelProductionToCapacityMultiplier <= 0f) return 0f;
+            return _engine.CurrentOutput / def.FuelProductionToCapacityMultiplier;
         }
 
         float GetCurrentO2Consumption()
@@ -109,9 +168,9 @@ namespace TSUT.H2Real
             float currentO2Consumption = GetCurrentO2Consumption();
             float currentHeat = Api.Utils.GetHeat(_engine);
             float blockCapacity = Api.Utils.GetThermalCapacity(_engine);
+            if (blockCapacity <= 0f) return;
 
             float internalUse = CalculateHeat(currentH2Consumption) / blockCapacity;
-
             float neighborExchange;
             float networkExchange;
             var neighborInfo = new StringBuilder();
@@ -123,7 +182,8 @@ namespace TSUT.H2Real
             );
 
             float currentPower = _engine.CurrentOutput;
-            float heatChange = GetHeatChange(1f) + neighborExchange + networkExchange;
+            float ambientExchange = Api.Utils.GetAmbientHeatLoss(block, 1);
+            float heatChange = internalUse - ambientExchange + neighborExchange + networkExchange;
 
             builder.AppendLine($"Current Power Output: {currentPower:F2} MW");
             builder.AppendLine("--- HMS.H2Real ---");
@@ -138,7 +198,7 @@ namespace TSUT.H2Real
             builder.AppendLine("");
             builder.AppendLine("Heat sources:");
             builder.AppendLine($"  Internal use: {internalUse:F2} °C/s");
-            builder.AppendLine($"  Air Exchange: {-Api.Utils.GetAmbientHeatLoss(block, 1):+0.00;-0.00;0.00} °C/s");
+            builder.AppendLine($"  Air Exchange: {-ambientExchange:+0.00;-0.00;0.00} °C/s");
             builder.Append(neighborInfo);
         }
 
@@ -151,6 +211,8 @@ namespace TSUT.H2Real
 
         public override float GetHeatChange(float deltaTime)
         {
+            if (_engine == null) return 0f;
+
             float tempChange = 0f;
             tempChange -= Api.Utils.GetAmbientHeatLoss(_engine, deltaTime);
 
@@ -177,14 +239,11 @@ namespace TSUT.H2Real
             }
 
             if (_engine.Enabled != newState)
-            {
-                _nextCallInternal = true;
                 _engine.Enabled = newState;
-            }
 
             float capacity = Api.Utils.GetThermalCapacity(_engine);
             if (capacity <= 0f)
-                return 0f;
+                return tempChange;
             tempChange += CalculateHeat(currentH2Consumption * deltaTime) / capacity;
 
             return tempChange;
@@ -204,6 +263,7 @@ namespace TSUT.H2Real
 
         public override void ReactOnNewHeat(float heat)
         {
+            if (_engine == null) return;
             Api.Effects.UpdateBlockHeatLight(_engine, heat);
             _engine.SetDetailedInfoDirty();
             _engine.RefreshCustomInfo();
@@ -213,6 +273,7 @@ namespace TSUT.H2Real
 
         public override void SpreadHeat(float deltaTime)
         {
+            if (_engine == null) return;
             SpreadHeatStandard(deltaTime);
         }
     }

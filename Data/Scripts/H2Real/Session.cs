@@ -11,6 +11,7 @@ namespace TSUT.H2Real
         {
             HmsApi.Instance?.Cleanup();
             HydrogenThrusterController.ResetStatics();
+            GasEngineController.ResetStatics();
         }
 
         public override void SaveData()
