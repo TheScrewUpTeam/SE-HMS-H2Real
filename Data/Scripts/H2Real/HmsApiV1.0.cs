@@ -5,7 +5,10 @@ using Sandbox.Engine.Multiplayer;
 using Sandbox.Game.Entities;
 using Sandbox.ModAPI;
 using SpaceEngineers.Game.ModAPI;
+using VRage.Game.Components;
 using VRage.Game.ModAPI;
+using VRage.ModAPI;
+using VRage.ObjectBuilders;
 using VRage.Utils;
 using VRageMath;
 
@@ -13,9 +16,10 @@ namespace TSUT.HeatManagement
 {
     public class HmsApi
     {
-        public string ApiVersion = "1.0.2";
+        public string ApiVersion = "1.0.3";
         public static long HeatApiMessageId = 35136709491; // Unique message ID for heat API
         public static long HeatProviderMesageId = 35136709492; // Unique message ID for heat provider
+        public static long HeatApiRequestMessageId = 35136709493; // Unique message ID to request a resend of the heat API
 
         private static HmsApi _instance;
         private Action _onReady;
@@ -23,25 +27,37 @@ namespace TSUT.HeatManagement
         public IHeatEffects Effects;
         private bool _isApiReceived = false;
 
+        /// <summary>
+        /// Returns the shared HmsApi instance, or null if not yet initialized.
+        /// </summary>
+        public static HmsApi Instance => _instance;
+
         public HmsApi(Action onReady)
         {
             if (_instance != null)
             {
-                return; // Prevent multiple instances
+                // Already initialized — fire immediately if ready, otherwise queue the callback
+                if (_instance._isApiReceived)
+                    onReady?.Invoke();
+                else
+                    _instance._onReady += onReady;
+                return;
             }
             _instance = this;
             _onReady = onReady;
             MyAPIGateway.Utilities.RegisterMessageHandler(HeatApiMessageId, OnApiReceived);
+            MyAPIGateway.Utilities.SendModMessage(HeatApiRequestMessageId, null);
         }
 
         private void OnApiReceived(object obj)
         {
-            if (_isApiReceived)
-                return;
             Utils = new HmsUtils(obj);
             Effects = new HmsEffects(obj);
-            _onReady?.Invoke();
-            _isApiReceived = true;
+            if (!_isApiReceived)
+            {
+                _isApiReceived = true;
+                _onReady?.Invoke();
+            }
         }
 
         public void RegisterHeatBehaviorFactory(
@@ -530,12 +546,12 @@ namespace TSUT.HeatManagement
                     {
                         neighborNetworks.Add(neighborFat, transfer / capacity);
                         neighborNetworkData.Add(neighborFat, (HeatNetworkData)netwrorkData);
-                        networkCumulative = -transfer / ownCapacity;
+                        networkCumulative += -transfer / ownCapacity;
                     }
                     else
                     {
                         neighborBlocks.Add(neighborFat, transfer / capacity);
-                        neighborCumulative = -transfer / ownCapacity;
+                        neighborCumulative += -transfer / ownCapacity;
                     }
                     energyTransferred -= transfer;
                 }
@@ -581,6 +597,280 @@ namespace TSUT.HeatManagement
             Utils = null;
             Effects = null;
             _instance = null;
+        }
+
+        /// <summary>
+        /// Component-based alternative to AHeatBehavior + RegisterHeatBehaviorFactory.
+        /// Extend this class, decorate with [MyEntityComponentDescriptor], and SE will
+        /// auto-attach it to matching blocks. No session-level registration needed.
+        ///
+        /// Example:
+        ///   [MyEntityComponentDescriptor(typeof(MyObjectBuilder_MyBlock), false)]
+        ///   public class MyBlockHeat : HmsApi.AHmsBlockComponent
+        ///   {
+        ///       public override float GetHeatChange(float dt) => 10f * dt;
+        ///       public override void SpreadHeat(float dt) => SpreadHeatStandard(dt);
+        ///       public override void OnDetachedFromHeatSystem() { }
+        ///       public override void ReactOnNewHeat(float heat) { }
+        ///   }
+        /// </summary>
+        public abstract class AHmsBlockComponent : MyGameLogicComponent
+        {
+            private static volatile HmsApi _sharedApi;
+            private static readonly object _apiLock = new object();
+            private static volatile IMySession _knownSession;
+            private static readonly List<AHmsBlockComponent> _pendingRegistration = new List<AHmsBlockComponent>();
+            private bool _registered = false;
+
+            protected IMyCubeBlock Block => (IMyCubeBlock)Entity;
+
+            /// <summary>The shared HmsApi instance. Available after HMS is loaded.</summary>
+            protected static HmsApi Api => _sharedApi;
+
+            private static void EnsureApi()
+            {
+                var session = MyAPIGateway.Session;
+                if (_sharedApi != null && session == _knownSession) return;
+                lock (_apiLock)
+                {
+                    if (_sharedApi != null && session == _knownSession) return;
+                    _knownSession = session;
+                    if (_sharedApi != null) _sharedApi.Cleanup();
+                    _sharedApi = new HmsApi(OnSharedApiReady);
+                }
+            }
+
+            private static void OnSharedApiReady()
+            {
+                var pending = new List<AHmsBlockComponent>(_pendingRegistration);
+                _pendingRegistration.Clear();
+                foreach (var comp in pending)
+                {
+                    if (!comp.IsAllowedGrid()) continue;
+                    comp.OnHmsInit();
+                    comp.RegisterWithHms();
+                }
+            }
+
+            public override void Init(MyObjectBuilder_EntityBase objectBuilder)
+            {
+                EnsureApi();
+                NeedsUpdate |= MyEntityUpdateEnum.BEFORE_NEXT_FRAME;
+            }
+
+            public sealed override void UpdateOnceBeforeFrame()
+            {
+                base.UpdateOnceBeforeFrame();
+                EnsureApi();
+                if (_sharedApi.Utils != null)
+                {
+                    if (IsAllowedGrid())
+                    {
+                        OnHmsInit();
+                        RegisterWithHms();
+                    }
+                }
+                else
+                    _pendingRegistration.Add(this);
+            }
+
+            private bool IsAllowedGrid()
+            {
+                var cfg = _sharedApi?.Utils?.GetHmsConfig();
+                if (cfg == null || !cfg.LIMIT_TO_PLAYER_GRIDS) return true;
+                var blocks = new List<IMyTerminalBlock>();
+                MyAPIGateway.TerminalActionsHelper.GetTerminalSystemForGrid(Block.CubeGrid)?.GetBlocks(blocks);
+                return blocks.Exists(b => b.OwnerId != 0 && MyAPIGateway.Players.TryGetIdentityId(b.OwnerId) != null);
+            }
+
+            /// <summary>
+            /// Called once after HMS is ready and the grid passes ownership checks.
+            /// Register terminal controls and subscribe SE events here (not in UpdateOnceBeforeFrame).
+            /// </summary>
+            protected virtual void OnHmsInit() { }
+
+            private void RegisterWithHms()
+            {
+                if (_registered || Entity == null) return;
+                _registered = true;
+                var blockId = Block.EntityId;
+                MyAPIGateway.Utilities.SendModMessage(HeatProviderMesageId, new Dictionary<string, object>
+                {
+                    { "blockId", blockId },
+                    { "behavior", new Dictionary<string, object>
+                        {
+                            { "GetHeatChange", new Func<float, float>(GetHeatChange) },
+                            { "ReactOnNewHeat", new Action<float>(ReactOnNewHeat) },
+                            { "SpreadHeat", new Action<float>(SpreadHeat) },
+                            { "Cleanup", new Action(OnDetachedFromHeatSystem) }
+                        }
+                    }
+                });
+            }
+
+            /// <summary>
+            /// Spreads heat to all neighboring blocks using standard HMS conduction logic.
+            /// Call this from SpreadHeat() for default behavior.
+            /// </summary>
+            protected void SpreadHeatStandard(float deltaTime)
+            {
+                var api = _sharedApi;
+                if (api?.Utils == null || Entity == null) return;
+
+                var neighbors = new List<IMySlimBlock>();
+                Block.SlimBlock.GetNeighbours(neighbors);
+
+                float ownCapacity = api.Utils.GetThermalCapacity(Block);
+                float ownChange = 0f;
+
+                foreach (var slim in neighbors)
+                {
+                    var neighbor = slim.FatBlock;
+                    if (neighbor == null) continue;
+                    float capacity = api.Utils.GetThermalCapacity(neighbor);
+                    float transfer = api.Utils.GetExchangeUniversal(Block, neighbor, deltaTime);
+                    api.Utils.SetHeat(neighbor, api.Utils.GetHeat(neighbor) + transfer / capacity);
+                    ownChange -= transfer / ownCapacity;
+                }
+
+                api.Utils.SetHeat(Block, api.Utils.GetHeat(Block) + ownChange);
+            }
+
+            /// <summary>
+            /// Calculates heat exchange with all neighboring blocks.
+            /// Splits results into direct neighbors and pipe-network neighbors.
+            /// Use deltaTime=1 for per-second rates (e.g. in terminal info display).
+            /// </summary>
+            protected void CalculateNeighborExchangeStandard(
+                float deltaTime,
+                ref float ownHeatChange,
+                out float neighborCumulative,
+                out float networkCumulative,
+                out Dictionary<IMyCubeBlock, float> neighborBlocks,
+                out Dictionary<IMyCubeBlock, float> neighborNetworks,
+                out Dictionary<IMyCubeBlock, HeatNetworkData> neighborNetworkData)
+            {
+                neighborBlocks = new Dictionary<IMyCubeBlock, float>();
+                neighborNetworks = new Dictionary<IMyCubeBlock, float>();
+                neighborNetworkData = new Dictionary<IMyCubeBlock, HeatNetworkData>();
+                neighborCumulative = 0f;
+                networkCumulative = 0f;
+
+                var api = _sharedApi;
+                if (api?.Utils == null || Entity == null) return;
+
+                var neighborList = new List<IMySlimBlock>();
+                Block.SlimBlock.GetNeighbours(neighborList);
+
+                float energyTransferred = 0f;
+                float ownCapacity = api.Utils.GetThermalCapacity(Block);
+
+                foreach (var neighborSlim in neighborList)
+                {
+                    var neighborFat = neighborSlim.FatBlock;
+                    if (neighborFat == null) continue;
+                    var networkData = api.Utils.GetNetworkData(neighborFat);
+                    var capacity = api.Utils.GetThermalCapacity(neighborFat);
+                    var transfer = api.Utils.GetExchangeUniversal(Block, neighborFat, deltaTime);
+                    if (networkData != null)
+                    {
+                        neighborNetworks.Add(neighborFat, transfer / capacity);
+                        neighborNetworkData.Add(neighborFat, (HeatNetworkData)networkData);
+                        networkCumulative += -transfer / ownCapacity;
+                    }
+                    else
+                    {
+                        neighborBlocks.Add(neighborFat, transfer / capacity);
+                        neighborCumulative += -transfer / ownCapacity;
+                    }
+                    energyTransferred -= transfer;
+                }
+
+                ownHeatChange = energyTransferred / ownCapacity;
+            }
+
+            /// <summary>
+            /// Appends neighbor and pipe-network heat exchange info to a StringBuilder.
+            /// Designed for use in AppendingCustomInfo terminal callbacks.
+            /// </summary>
+            protected void AddNeighborAndNetworksInfo(
+                StringBuilder info,
+                out float cumulativeNeighborHeatChange,
+                out float cumulativeNetworkHeatChange)
+            {
+                var temperatureChange = 0f;
+                Dictionary<IMyCubeBlock, float> neighborList;
+                Dictionary<IMyCubeBlock, float> networkList;
+                Dictionary<IMyCubeBlock, HeatNetworkData> neighborNetworkData;
+                CalculateNeighborExchangeStandard(
+                    1f,
+                    ref temperatureChange,
+                    out cumulativeNeighborHeatChange,
+                    out cumulativeNetworkHeatChange,
+                    out neighborList,
+                    out networkList,
+                    out neighborNetworkData);
+
+                var api = _sharedApi;
+                info.AppendLine($"  Neighbor Block: {cumulativeNeighborHeatChange:+0.00;-0.00;0.00} °C/s");
+                info.AppendLine($"  Heat pipes: {cumulativeNetworkHeatChange:+0.00;-0.00;0.00} °C/s");
+
+                if (neighborList.Count > 0)
+                {
+                    info.AppendLine("");
+                    info.AppendLine("Neighbors:");
+                    foreach (var kvp in neighborList)
+                        info.AppendLine($"- {kvp.Key.DisplayNameText} ({api?.Utils.GetHeat(kvp.Key):F2}°C) -> {kvp.Value:F4} °C/s");
+                    foreach (var kvp in networkList)
+                        info.AppendLine($"- {kvp.Key.DisplayNameText}-NET- ({api?.Utils.GetHeat(kvp.Key):F2}°C) -> {kvp.Value:F4} °C/s");
+                }
+                if (networkList.Count > 0)
+                {
+                    info.AppendLine("");
+                    info.AppendLine("Pipe networks:");
+                    foreach (var kvp in networkList)
+                    {
+                        var nd = neighborNetworkData[kvp.Key];
+                        info.AppendLine($"- #{nd.hash} Length: {nd.length}, Avg: {nd.averageTemperature:F1} °C");
+                    }
+                }
+            }
+
+            public override void OnRemovedFromScene()
+            {
+                _registered = false;
+                _pendingRegistration.Remove(this);
+                base.OnRemovedFromScene();
+            }
+
+            public override void OnAddedToScene()
+            {
+                base.OnAddedToScene();
+                NeedsUpdate |= MyEntityUpdateEnum.BEFORE_NEXT_FRAME;
+            }
+
+            public override void Close()
+            {
+                _pendingRegistration.Remove(this);
+                OnDetachedFromHeatSystem();
+                base.Close();
+            }
+
+            /// <summary>Called every tick. Return heat to add (positive) or remove (negative).</summary>
+            public abstract float GetHeatChange(float deltaTime);
+
+            /// <summary>Called every tick to exchange heat with neighbors. Call SpreadHeatStandard(deltaTime) for default behavior.</summary>
+            public abstract void SpreadHeat(float deltaTime);
+
+            /// <summary>
+            /// Called by HMS when this block leaves the heat system (grid destroyed, merge, unload).
+            /// Use for HMS-specific cleanup only — do NOT unsubscribe SE events here.
+            /// Unsubscribe SE events in Close() instead.
+            /// </summary>
+            public abstract void OnDetachedFromHeatSystem();
+
+            /// <summary>Called after the block's heat value changes.</summary>
+            public abstract void ReactOnNewHeat(float heat);
         }
 
         internal class HmsUtils : IHeatUtils
@@ -768,7 +1058,7 @@ namespace TSUT.HeatManagement
                     var fn = (Func<long, long, float, float>)method;
                     return fn(block?.EntityId ?? 0, neighbor?.EntityId ?? 0, deltaTime);
                 }
-                MyLog.Default.Warning($"[H2Real] No method GetExchangeWithNeighbor found {client.Count}");
+                MyLog.Default.Warning($"[HeatManagement.Net] No method GetExchangeWithNeighbor found in client dict (count={client.Count})");
                 return 0f;
             }
 
