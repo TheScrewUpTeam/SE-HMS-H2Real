@@ -6,9 +6,9 @@ namespace TSUT.HeatManagement
 {
     public class Config
     {
-        public static string Version = "1.1.0";
+        public static string Version = "1.2.0";
 
-        public string SYSTEM_VERSION = "1.1.0";
+        public string SYSTEM_VERSION = "1.2.0";
         public bool SYSTEM_AUTO_UPDATE = true;
         public float O2_USAGE_FROM_H2_THRUSTER { get; set; } = .5f; // Liters of O2 used per two liter of H2 for thrusters
         public float O2_USAGE_FROM_H2_ENGINE { get; set; } = .5f; // Liters of O2 used per two liter of H2 for engines

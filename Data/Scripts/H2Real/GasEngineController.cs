@@ -107,7 +107,7 @@ namespace TSUT.H2Real
         {
             var ctrl = Get(block);
             return ctrl != null
-                ? ctrl._playerWantsOn
+                ? ctrl.WantsOn
                 : _origOnOffGetter?.Invoke(block) ?? (block as IMyFunctionalBlock)?.Enabled ?? false;
         }
 
@@ -115,7 +115,7 @@ namespace TSUT.H2Real
         {
             var ctrl = Get(block);
             if (ctrl != null)
-                ctrl._playerWantsOn = value;
+                ctrl.WantsOn = value;
             else
                 _origOnOffSetter?.Invoke(block, value);
         }
@@ -124,7 +124,7 @@ namespace TSUT.H2Real
         {
             var ctrl = Get(block);
             if (ctrl != null)
-                ctrl._playerWantsOn = !ctrl._playerWantsOn;
+                ctrl.WantsOn = !ctrl.WantsOn;
             else
                 _origToggleAction?.Invoke(block);
         }
@@ -133,7 +133,7 @@ namespace TSUT.H2Real
         {
             var ctrl = Get(block);
             if (ctrl != null)
-                ctrl._playerWantsOn = true;
+                ctrl.WantsOn = true;
             else
                 _origOnAction?.Invoke(block);
         }
@@ -142,9 +142,30 @@ namespace TSUT.H2Real
         {
             var ctrl = Get(block);
             if (ctrl != null)
-                ctrl._playerWantsOn = false;
+                ctrl.WantsOn = false;
             else
                 _origOffAction?.Invoke(block);
+        }
+
+        public bool WantsOn
+        {
+            get { return _playerWantsOn; }
+            set
+            {
+                if (!MyAPIGateway.Multiplayer.IsServer)
+                {
+                    Session.Networking.SendToServer(new EngineWantsOnRequest { EntityId = Entity.EntityId, Value = value });
+                    return;
+                }
+                if (_playerWantsOn == value) return;
+                _playerWantsOn = value;
+                Session.Networking.RelayToClients(new EngineWantsOnSync { EntityId = Entity.EntityId, Value = value });
+            }
+        }
+
+        public void ReceiveWantsOn(bool value)
+        {
+            _playerWantsOn = value;
         }
 
         public override void OnDetachedFromHeatSystem() { }
