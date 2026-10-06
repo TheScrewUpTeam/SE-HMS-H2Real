@@ -32,7 +32,10 @@ namespace TSUT.H2Real
         static Action<IMyTerminalBlock> _origOffAction;
 
         static HydrogenThrusterController Get(IMyTerminalBlock b)
-            => b.GameLogic.GetAs<HydrogenThrusterController>();
+        {
+            var ctrl = b.GameLogic.GetAs<HydrogenThrusterController>();
+            return ctrl?._thruster != null ? ctrl : null;
+        }
 
         public override void Init(MyObjectBuilder_EntityBase objectBuilder)
         {

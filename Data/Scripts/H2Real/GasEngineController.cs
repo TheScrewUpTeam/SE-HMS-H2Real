@@ -32,10 +32,18 @@ namespace TSUT.H2Real
         static Action<IMyTerminalBlock> _origOffAction;
 
         static GasEngineController Get(IMyTerminalBlock b)
-            => b.GameLogic.GetAs<GasEngineController>();
+        {
+            var ctrl = b.GameLogic.GetAs<GasEngineController>();
+            return ctrl?._engine != null ? ctrl : null;
+        }
 
         public override void Init(MyObjectBuilder_EntityBase objectBuilder)
         {
+            // Skip engines burning other fuels (e.g. Industrial Overhaul deuterium fusion reactor)
+            var def = MyDefinitionManager.Static.GetCubeBlockDefinition(((IMyCubeBlock)Entity).BlockDefinition) as MyGasFueledPowerProducerDefinition;
+            if (def == null || def.Fuel.FuelId.SubtypeName != "Hydrogen")
+                return;
+
             base.Init(objectBuilder);
             _engine = (IMyPowerProducer)Entity;
             _engine.AppendingCustomInfo += AppendHeatInfo;

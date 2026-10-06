@@ -28,6 +28,24 @@ namespace TSUT.H2Real
         private float _coldThresholdTemp;
         private bool _isHot;
         private float _lastCompressionPower;
+        private bool _handled;
+
+        public override void Init(MyObjectBuilder_EntityBase objectBuilder)
+        {
+            // Skip modded generators producing other gases (e.g. Industrial Overhaul steam/deuterium/fuel blocks)
+            var def = MyDefinitionManager.Static.GetCubeBlockDefinition(((IMyCubeBlock)Entity).BlockDefinition) as MyOxygenGeneratorDefinition;
+            if (def?.ProducedGases == null)
+                return;
+            foreach (var gas in def.ProducedGases)
+            {
+                var subtype = gas.Id.SubtypeName;
+                if (subtype != "Oxygen" && subtype != "Hydrogen")
+                    return;
+            }
+
+            _handled = true;
+            base.Init(objectBuilder);
+        }
 
         protected override void OnHmsInit()
         {
@@ -51,7 +69,7 @@ namespace TSUT.H2Real
         public override void Close()
         {
             var gen = Generator;
-            if (gen != null)
+            if (gen != null && _handled)
             {
                 gen.AppendingCustomInfo -= AppendHeatInfo;
                 ((Sandbox.ModAPI.IMyGasGenerator)gen).PowerConsumptionMultiplier = 1f;

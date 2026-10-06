@@ -16,7 +16,7 @@ namespace TSUT.HeatManagement
 {
     public class HmsApi
     {
-        public string ApiVersion = "1.0.3";
+        public string ApiVersion = "1.0.9";
         public static long HeatApiMessageId = 35136709491; // Unique message ID for heat API
         public static long HeatProviderMesageId = 35136709492; // Unique message ID for heat provider
         public static long HeatApiRequestMessageId = 35136709493; // Unique message ID to request a resend of the heat API
@@ -38,7 +38,7 @@ namespace TSUT.HeatManagement
             {
                 // Already initialized — fire immediately if ready, otherwise queue the callback
                 if (_instance._isApiReceived)
-                    onReady?.Invoke();
+                    MyAPIGateway.Utilities.InvokeOnGameThread(() => onReady?.Invoke());
                 else
                     _instance._onReady += onReady;
                 return;
@@ -46,7 +46,8 @@ namespace TSUT.HeatManagement
             _instance = this;
             _onReady = onReady;
             MyAPIGateway.Utilities.RegisterMessageHandler(HeatApiMessageId, OnApiReceived);
-            MyAPIGateway.Utilities.SendModMessage(HeatApiRequestMessageId, null);
+            MyAPIGateway.Utilities.InvokeOnGameThread(() =>
+                MyAPIGateway.Utilities.SendModMessage(HeatApiRequestMessageId, null));
         }
 
         private void OnApiReceived(object obj)
@@ -56,7 +57,8 @@ namespace TSUT.HeatManagement
             if (!_isApiReceived)
             {
                 _isApiReceived = true;
-                _onReady?.Invoke();
+                var cb = _onReady;
+                MyAPIGateway.Utilities.InvokeOnGameThread(() => cb?.Invoke());
             }
         }
 
@@ -88,6 +90,18 @@ namespace TSUT.HeatManagement
                         return MapBehavior(behavior);
                     })
                 }
+            });
+        }
+
+        /// <summary>
+        /// Registers a callback invoked once the server's authoritative config has been
+        /// synced to this client (and again on any future runtime config change).
+        /// </summary>
+        public void RegisterConfigChanged(Action callback)
+        {
+            MyAPIGateway.Utilities.SendModMessage(HeatProviderMesageId, new Dictionary<string, object>
+            {
+                { "onConfigChanged", callback }
             });
         }
 
@@ -236,6 +250,13 @@ namespace TSUT.HeatManagement
             /// </summary>
             /// <returns>The current heat management system configuration.</returns>
             HmsConfig GetHmsConfig();
+
+            /// <summary>
+            /// True once this machine holds authoritative config (always true server-side;
+            /// false on a client until the first config sync from the server completes).
+            /// Values from GetHmsConfig() before this is true are defaults, not real settings.
+            /// </summary>
+            bool IsConfigSynced();
         }
 
         public struct HeatNetworkData
@@ -620,9 +641,25 @@ namespace TSUT.HeatManagement
             private static readonly object _apiLock = new object();
             private static volatile IMySession _knownSession;
             private static readonly List<AHmsBlockComponent> _pendingRegistration = new List<AHmsBlockComponent>();
+            private static readonly HashSet<AHmsBlockComponent> _liveInstances = new HashSet<AHmsBlockComponent>();
+            private static bool _configChangedSubscribed = false;
             private bool _registered = false;
+            private bool _hmsInitDone = false;
+            // Stays false unless base.Init accepts the block, so subclasses that skip base.Init are excluded too.
+            private bool _attached = false;
+            private IMyTerminalBlock _ownershipBlock = null;
 
             protected IMyCubeBlock Block => (IMyCubeBlock)Entity;
+
+            /// <summary>
+            /// Return false to exclude this block from HMS entirely: no OnHmsInit, no registration, no updates.
+            /// Called from Init; Entity and its block definition are available.
+            /// Use to filter modded blocks that share a vanilla TypeId with the blocks you target.
+            /// </summary>
+            protected virtual bool ShouldAttach() => true;
+
+            /// <summary>True if this component accepted the block. Check after base.Init in overrides before subscribing events.</summary>
+            protected bool IsAttached => _attached;
 
             /// <summary>The shared HmsApi instance. Available after HMS is loaded.</summary>
             protected static HmsApi Api => _sharedApi;
@@ -636,51 +673,152 @@ namespace TSUT.HeatManagement
                     if (_sharedApi != null && session == _knownSession) return;
                     _knownSession = session;
                     if (_sharedApi != null) _sharedApi.Cleanup();
+                    _configChangedSubscribed = false;
                     _sharedApi = new HmsApi(OnSharedApiReady);
+                }
+            }
+
+            private static void EnsureConfigChangedSubscription()
+            {
+                if (_configChangedSubscribed || _sharedApi == null) return;
+                _configChangedSubscribed = true;
+                _sharedApi.RegisterConfigChanged(OnConfigChangedStatic);
+            }
+
+            private static void OnConfigChangedStatic()
+            {
+                List<AHmsBlockComponent> liveSnapshot;
+                lock (_apiLock) liveSnapshot = new List<AHmsBlockComponent>(_liveInstances);
+                foreach (var comp in liveSnapshot)
+                {
+                    if (comp.Entity == null) continue;
+                    comp.SubscribeOwnershipChanges();
+                    comp.ReevaluateGridAllowed();
                 }
             }
 
             private static void OnSharedApiReady()
             {
-                var pending = new List<AHmsBlockComponent>(_pendingRegistration);
-                _pendingRegistration.Clear();
+                List<AHmsBlockComponent> pending;
+                lock (_apiLock)
+                {
+                    pending = new List<AHmsBlockComponent>(_pendingRegistration);
+                    _pendingRegistration.Clear();
+                }
+                EnsureConfigChangedSubscription();
                 foreach (var comp in pending)
                 {
+                    if (!comp._attached) continue;
+                    if (comp.Block?.CubeGrid?.Physics == null) continue; // projected/preview block, not a real placed block
+                    comp.SubscribeOwnershipChanges();
                     if (!comp.IsAllowedGrid()) continue;
-                    comp.OnHmsInit();
+                    comp.EnsureHmsInit();
                     comp.RegisterWithHms();
                 }
             }
 
             public override void Init(MyObjectBuilder_EntityBase objectBuilder)
             {
+                _attached = ShouldAttach();
+                if (!_attached) return;
                 EnsureApi();
+                lock (_apiLock) _liveInstances.Add(this);
                 NeedsUpdate |= MyEntityUpdateEnum.BEFORE_NEXT_FRAME;
             }
 
             public sealed override void UpdateOnceBeforeFrame()
             {
                 base.UpdateOnceBeforeFrame();
+                if (!_attached) return;
+                if (Block?.CubeGrid?.Physics == null) return; // projected/preview block, not a real placed block
                 EnsureApi();
+                SubscribeOwnershipChanges();
                 if (_sharedApi.Utils != null)
                 {
+                    EnsureConfigChangedSubscription();
                     if (IsAllowedGrid())
                     {
-                        OnHmsInit();
+                        EnsureHmsInit();
                         RegisterWithHms();
                     }
                 }
                 else
-                    _pendingRegistration.Add(this);
+                    lock (_apiLock) _pendingRegistration.Add(this);
+            }
+
+            // Re-evaluates grid-allow status on ownership transfer instead of deciding once at spawn.
+            private void SubscribeOwnershipChanges()
+            {
+                if (_ownershipBlock != null) return;
+                _ownershipBlock = Block as IMyTerminalBlock;
+                if (_ownershipBlock == null) return;
+                _ownershipBlock.OwnershipChanged += OnOwnershipChanged;
+            }
+
+            private void UnsubscribeOwnershipChanges()
+            {
+                if (_ownershipBlock == null) return;
+                _ownershipBlock.OwnershipChanged -= OnOwnershipChanged;
+                _ownershipBlock = null;
+            }
+
+            private void OnOwnershipChanged(IMyTerminalBlock block)
+            {
+                ReevaluateGridAllowed();
+            }
+
+            private void ReevaluateGridAllowed()
+            {
+                if (!_attached || Entity == null || _sharedApi?.Utils == null) return;
+                bool allowed = IsAllowedGrid();
+                if (allowed && !_registered)
+                {
+                    EnsureHmsInit();
+                    RegisterWithHms();
+                }
+                else if (!allowed && _registered)
+                {
+                    UnregisterWithHms();
+                }
+            }
+
+            private void EnsureHmsInit()
+            {
+                if (_hmsInitDone) return;
+                _hmsInitDone = true;
+                OnHmsInit();
             }
 
             private bool IsAllowedGrid()
             {
-                var cfg = _sharedApi?.Utils?.GetHmsConfig();
-                if (cfg == null || !cfg.LIMIT_TO_PLAYER_GRIDS) return true;
-                var blocks = new List<IMyTerminalBlock>();
-                MyAPIGateway.TerminalActionsHelper.GetTerminalSystemForGrid(Block.CubeGrid)?.GetBlocks(blocks);
-                return blocks.Exists(b => b.OwnerId != 0 && MyAPIGateway.Players.TryGetIdentityId(b.OwnerId) != null);
+                if (_sharedApi?.Utils == null || !_sharedApi.Utils.IsConfigSynced()) return false;
+                var cfg = _sharedApi.Utils.GetHmsConfig();
+                if (cfg == null) return false;
+                if (!cfg.LIMIT_TO_PLAYER_GRIDS) return true;
+                if (MyAPIGateway.Players == null) return false;
+                if (OwnerIsHumanPlayer(Block.OwnerId))
+                    return true;
+                var cubeGrid = Block.CubeGrid as MyCubeGrid;
+                if (cubeGrid?.BigOwners == null) return false;
+                foreach (var ownerId in cubeGrid.BigOwners)
+                {
+                    if (OwnerIsHumanPlayer(ownerId))
+                        return true;
+                }
+                return false;
+            }
+
+            // TryGetIdentityId alone isn't enough: bot/NPC identities have a backing IMyPlayer too.
+            private static bool OwnerIsHumanPlayer(long identityId)
+            {
+                if (identityId == 0) return false;
+                var online = MyAPIGateway.Players.TryGetIdentityId(identityId);
+                if (online != null) return !online.IsBot;
+
+                var faction = MyAPIGateway.Session?.Factions?.TryGetPlayerFaction(identityId);
+                if (faction != null && faction.IsEveryoneNpc()) return false;
+
+                return MyAPIGateway.Players.TryGetSteamId(identityId) != 0;
             }
 
             /// <summary>
@@ -702,10 +840,29 @@ namespace TSUT.HeatManagement
                             { "GetHeatChange", new Func<float, float>(GetHeatChange) },
                             { "ReactOnNewHeat", new Action<float>(ReactOnNewHeat) },
                             { "SpreadHeat", new Action<float>(SpreadHeat) },
-                            { "Cleanup", new Action(OnDetachedFromHeatSystem) }
+                            { "Cleanup", new Action(HandleHmsDetach) }
                         }
                     }
                 });
+            }
+
+            private void UnregisterWithHms()
+            {
+                if (!_registered || Entity == null) return;
+                _registered = false;
+                var blockId = Block.EntityId;
+                MyAPIGateway.Utilities.SendModMessage(HeatProviderMesageId, new Dictionary<string, object>
+                {
+                    { "blockId", blockId },
+                    { "unregister", true }
+                });
+            }
+
+            // Keeps _registered in sync when HMS drops us on its own (grid Deactivate, etc.).
+            private void HandleHmsDetach()
+            {
+                _registered = false;
+                OnDetachedFromHeatSystem();
             }
 
             /// <summary>
@@ -838,21 +995,41 @@ namespace TSUT.HeatManagement
 
             public override void OnRemovedFromScene()
             {
+                UnsubscribeOwnershipChanges();
+                lock (_apiLock)
+                {
+                    _liveInstances.Remove(this);
+                    _pendingRegistration.Remove(this);
+                }
                 _registered = false;
-                _pendingRegistration.Remove(this);
                 base.OnRemovedFromScene();
             }
 
             public override void OnAddedToScene()
             {
                 base.OnAddedToScene();
+                if (!_attached) return;
                 NeedsUpdate |= MyEntityUpdateEnum.BEFORE_NEXT_FRAME;
             }
 
             public override void Close()
             {
-                _pendingRegistration.Remove(this);
-                OnDetachedFromHeatSystem();
+                if (!_attached)
+                {
+                    base.Close();
+                    return;
+                }
+                UnsubscribeOwnershipChanges();
+                lock (_apiLock)
+                {
+                    _liveInstances.Remove(this);
+                    _pendingRegistration.Remove(this);
+                }
+                // UnregisterWithHms round-trips through HMS and calls OnDetachedFromHeatSystem() for us.
+                if (_registered)
+                    UnregisterWithHms();
+                else
+                    OnDetachedFromHeatSystem();
                 base.Close();
             }
 
@@ -1212,6 +1389,17 @@ namespace TSUT.HeatManagement
                     return fn(amount, deltaTime, block?.EntityId ?? 0);
                 }
                 return false;
+            }
+
+            public bool IsConfigSynced()
+            {
+                object method;
+                if (client.TryGetValue("IsConfigSynced", out method) && method is Func<bool>)
+                {
+                    var fn = (Func<bool>)method;
+                    return fn();
+                }
+                return true; // older HMS without this member — behave as before (no gating)
             }
 
             public HmsConfig GetHmsConfig()
